@@ -1,36 +1,40 @@
+import { useEnv } from '@directus/env';
+import { ForbiddenError, InvalidPayloadError } from '@directus/errors';
 import type { ForeignKey, SchemaInspector } from '@directus/schema';
 import { createInspector } from '@directus/schema';
+import { systemRelationRows } from '@directus/system-data';
 import type { Accountability, Query, Relation, RelationMeta, SchemaOverview } from '@directus/types';
 import { toArray } from '@directus/utils';
 import type Keyv from 'keyv';
 import type { Knex } from 'knex';
-import { clearSystemCache, getCache } from '../cache.js';
+import { clearSystemCache, getCache, getCacheValue, setCacheValue } from '../cache.js';
 import type { Helpers } from '../database/helpers/index.js';
 import { getHelpers } from '../database/helpers/index.js';
 import getDatabase, { getSchemaInspector } from '../database/index.js';
-import { systemRelationRows } from '../database/system-data/relations/index.js';
 import emitter from '../emitter.js';
-import { ForbiddenException, InvalidPayloadException } from '../exceptions/index.js';
+import { fetchAllowedFieldMap } from '../permissions/modules/fetch-allowed-field-map/fetch-allowed-field-map.js';
+import { fetchAllowedFields } from '../permissions/modules/fetch-allowed-fields/fetch-allowed-fields.js';
+import { validateAccess } from '../permissions/modules/validate-access/validate-access.js';
 import type { AbstractServiceOptions, ActionEventParams, MutationOptions } from '../types/index.js';
 import { getDefaultIndexName } from '../utils/get-default-index-name.js';
 import { getSchema } from '../utils/get-schema.js';
-import type { QueryOptions } from './items.js';
-import { ItemsService } from './items.js';
-import { PermissionsService } from './permissions.js';
+import { transaction } from '../utils/transaction.js';
+import { ItemsService, type QueryOptions } from './items.js';
+
+const env = useEnv();
 
 export class RelationsService {
 	knex: Knex;
-	permissionsService: PermissionsService;
 	schemaInspector: SchemaInspector;
 	accountability: Accountability | null;
 	schema: SchemaOverview;
 	relationsItemService: ItemsService<RelationMeta>;
 	systemCache: Keyv<any>;
+	schemaCache: Keyv<any>;
 	helpers: Helpers;
 
 	constructor(options: AbstractServiceOptions) {
 		this.knex = options.knex || getDatabase();
-		this.permissionsService = new PermissionsService(options);
 		this.schemaInspector = options.knex ? createInspector(options.knex) : getSchemaInspector();
 		this.schema = options.schema;
 		this.accountability = options.accountability || null;
@@ -43,13 +47,49 @@ export class RelationsService {
 			// happens in `filterForbidden` down below
 		});
 
-		this.systemCache = getCache().systemCache;
+		const cache = getCache();
+		this.systemCache = cache.systemCache;
+		this.schemaCache = cache.localSchemaCache;
 		this.helpers = getHelpers(this.knex);
 	}
 
+	async foreignKeys(collection?: string) {
+		const schemaCacheIsEnabled = Boolean(env['CACHE_SCHEMA']);
+
+		let foreignKeys: ForeignKey[] | null = null;
+
+		if (schemaCacheIsEnabled) {
+			foreignKeys = await getCacheValue(this.schemaCache, 'foreignKeys');
+		}
+
+		if (!foreignKeys) {
+			foreignKeys = await this.schemaInspector.foreignKeys();
+
+			if (schemaCacheIsEnabled) {
+				setCacheValue(this.schemaCache, 'foreignKeys', foreignKeys);
+			}
+		}
+
+		if (collection) {
+			return foreignKeys.filter((row) => row.table === collection);
+		}
+
+		return foreignKeys;
+	}
+
 	async readAll(collection?: string, opts?: QueryOptions): Promise<Relation[]> {
-		if (this.accountability && this.accountability.admin !== true && this.hasReadAccess === false) {
-			throw new ForbiddenException();
+		if (this.accountability) {
+			await validateAccess(
+				{
+					accountability: this.accountability,
+					action: 'read',
+					collection: 'directus_relations',
+				},
+				{
+					knex: this.knex,
+					schema: this.schema,
+				},
+			);
 		}
 
 		const metaReadQuery: Query = {
@@ -72,26 +112,32 @@ export class RelationsService {
 			return metaRow.many_collection === collection;
 		});
 
-		const schemaRows = await this.schemaInspector.foreignKeys(collection);
+		const schemaRows = await this.foreignKeys(collection);
 		const results = this.stitchRelations(metaRows, schemaRows);
 		return await this.filterForbidden(results);
 	}
 
 	async readOne(collection: string, field: string): Promise<Relation> {
 		if (this.accountability && this.accountability.admin !== true) {
-			if (this.hasReadAccess === false) {
-				throw new ForbiddenException();
-			}
+			await validateAccess(
+				{
+					accountability: this.accountability,
+					action: 'read',
+					collection: 'directus_relations',
+				},
+				{
+					schema: this.schema,
+					knex: this.knex,
+				},
+			);
 
-			const permissions = this.accountability.permissions?.find((permission) => {
-				return permission.action === 'read' && permission.collection === collection;
-			});
+			const allowedFields = await fetchAllowedFields(
+				{ collection, action: 'read', accountability: this.accountability },
+				{ schema: this.schema, knex: this.knex },
+			);
 
-			if (!permissions || !permissions.fields) throw new ForbiddenException();
-
-			if (permissions.fields.includes('*') === false) {
-				const allowedFields = permissions.fields;
-				if (allowedFields.includes(field) === false) throw new ForbiddenException();
+			if (allowedFields.includes('*') === false && allowedFields.includes(field) === false) {
+				throw new ForbiddenError();
 			}
 		}
 
@@ -113,15 +159,13 @@ export class RelationsService {
 			},
 		});
 
-		const schemaRow = (await this.schemaInspector.foreignKeys(collection)).find(
-			(foreignKey) => foreignKey.column === field
-		);
+		const schemaRow = (await this.foreignKeys(collection)).find((foreignKey) => foreignKey.column === field);
 
 		const stitched = this.stitchRelations(metaRow, schemaRow ? [schemaRow] : []);
 		const results = await this.filterForbidden(stitched);
 
 		if (results.length === 0) {
-			throw new ForbiddenException();
+			throw new ForbiddenError();
 		}
 
 		return results[0]!;
@@ -132,47 +176,51 @@ export class RelationsService {
 	 */
 	async createOne(relation: Partial<Relation>, opts?: MutationOptions): Promise<void> {
 		if (this.accountability && this.accountability.admin !== true) {
-			throw new ForbiddenException();
+			throw new ForbiddenError();
 		}
 
 		if (!relation.collection) {
-			throw new InvalidPayloadException('"collection" is required');
+			throw new InvalidPayloadError({ reason: '"collection" is required' });
 		}
 
 		if (!relation.field) {
-			throw new InvalidPayloadException('"field" is required');
+			throw new InvalidPayloadError({ reason: '"field" is required' });
 		}
 
-		if (relation.collection in this.schema.collections === false) {
-			throw new InvalidPayloadException(`Collection "${relation.collection}" doesn't exist`);
+		const collectionSchema = this.schema.collections[relation.collection];
+
+		if (!collectionSchema) {
+			throw new InvalidPayloadError({ reason: `Collection "${relation.collection}" doesn't exist` });
 		}
 
-		if (relation.field in this.schema.collections[relation.collection]!.fields === false) {
-			throw new InvalidPayloadException(
-				`Field "${relation.field}" doesn't exist in collection "${relation.collection}"`
-			);
+		const fieldSchema = collectionSchema.fields[relation.field];
+
+		if (!fieldSchema) {
+			throw new InvalidPayloadError({
+				reason: `Field "${relation.field}" doesn't exist in collection "${relation.collection}"`,
+			});
 		}
 
 		// A primary key should not be a foreign key
-		if (this.schema.collections[relation.collection]!.primary === relation.field) {
-			throw new InvalidPayloadException(
-				`Field "${relation.field}" in collection "${relation.collection}" is a primary key`
-			);
+		if (collectionSchema.primary === relation.field) {
+			throw new InvalidPayloadError({
+				reason: `Field "${relation.field}" in collection "${relation.collection}" is a primary key`,
+			});
 		}
 
 		if (relation.related_collection && relation.related_collection in this.schema.collections === false) {
-			throw new InvalidPayloadException(`Collection "${relation.related_collection}" doesn't exist`);
+			throw new InvalidPayloadError({ reason: `Collection "${relation.related_collection}" doesn't exist` });
 		}
 
 		const existingRelation = this.schema.relations.find(
 			(existingRelation) =>
-				existingRelation.collection === relation.collection && existingRelation.field === relation.field
+				existingRelation.collection === relation.collection && existingRelation.field === relation.field,
 		);
 
 		if (existingRelation) {
-			throw new InvalidPayloadException(
-				`Field "${relation.field}" in collection "${relation.collection}" already has an associated relationship`
-			);
+			throw new InvalidPayloadError({
+				reason: `Field "${relation.field}" in collection "${relation.collection}" already has an associated relationship`,
+			});
 		}
 
 		const runPostColumnChange = await this.helpers.schema.preColumnChange();
@@ -188,21 +236,25 @@ export class RelationsService {
 				one_collection: relation.related_collection || null,
 			};
 
-			await this.knex.transaction(async (trx) => {
+			await transaction(this.knex, async (trx) => {
 				if (relation.related_collection) {
 					await trx.schema.alterTable(relation.collection!, async (table) => {
-						this.alterType(table, relation);
+						this.alterType(table, relation, fieldSchema.nullable);
 
 						const constraintName: string = getDefaultIndexName('foreign', relation.collection!, relation.field!);
 
 						const builder = table
 							.foreign(relation.field!, constraintName)
 							.references(
-								`${relation.related_collection!}.${this.schema.collections[relation.related_collection!]!.primary}`
+								`${relation.related_collection!}.${this.schema.collections[relation.related_collection!]!.primary}`,
 							);
 
 						if (relation.schema?.on_delete) {
 							builder.onDelete(relation.schema.on_delete);
+						}
+
+						if (relation.schema?.on_update) {
+							builder.onUpdate(relation.schema.on_update);
 						}
 					});
 				}
@@ -249,26 +301,32 @@ export class RelationsService {
 		collection: string,
 		field: string,
 		relation: Partial<Relation>,
-		opts?: MutationOptions
+		opts?: MutationOptions,
 	): Promise<void> {
 		if (this.accountability && this.accountability.admin !== true) {
-			throw new ForbiddenException();
+			throw new ForbiddenError();
 		}
 
-		if (collection in this.schema.collections === false) {
-			throw new InvalidPayloadException(`Collection "${collection}" doesn't exist`);
+		const collectionSchema = this.schema.collections[collection];
+
+		if (!collectionSchema) {
+			throw new InvalidPayloadError({ reason: `Collection "${collection}" doesn't exist` });
 		}
 
-		if (field in this.schema.collections[collection]!.fields === false) {
-			throw new InvalidPayloadException(`Field "${field}" doesn't exist in collection "${collection}"`);
+		const fieldSchema = collectionSchema.fields[field];
+
+		if (!fieldSchema) {
+			throw new InvalidPayloadError({ reason: `Field "${field}" doesn't exist in collection "${collection}"` });
 		}
 
 		const existingRelation = this.schema.relations.find(
-			(existingRelation) => existingRelation.collection === collection && existingRelation.field === field
+			(existingRelation) => existingRelation.collection === collection && existingRelation.field === field,
 		);
 
 		if (!existingRelation) {
-			throw new InvalidPayloadException(`Field "${field}" in collection "${collection}" doesn't have a relationship.`);
+			throw new InvalidPayloadError({
+				reason: `Field "${field}" in collection "${collection}" doesn't have a relationship.`,
+			});
 		}
 
 		const runPostColumnChange = await this.helpers.schema.preColumnChange();
@@ -277,7 +335,7 @@ export class RelationsService {
 		const nestedActionEvents: ActionEventParams[] = [];
 
 		try {
-			await this.knex.transaction(async (trx) => {
+			await transaction(this.knex, async (trx) => {
 				if (existingRelation.related_collection) {
 					await trx.schema.alterTable(collection, async (table) => {
 						let constraintName: string = getDefaultIndexName('foreign', collection, field);
@@ -291,18 +349,22 @@ export class RelationsService {
 							existingRelation.schema.constraint_name = constraintName;
 						}
 
-						this.alterType(table, relation);
+						this.alterType(table, relation, fieldSchema.nullable);
 
 						const builder = table
 							.foreign(field, constraintName || undefined)
 							.references(
 								`${existingRelation.related_collection!}.${
 									this.schema.collections[existingRelation.related_collection!]!.primary
-								}`
+								}`,
 							);
 
 						if (relation.schema?.on_delete) {
 							builder.onDelete(relation.schema.on_delete);
+						}
+
+						if (relation.schema?.on_update) {
+							builder.onUpdate(relation.schema.on_update);
 						}
 					});
 				}
@@ -332,7 +394,7 @@ export class RelationsService {
 							{
 								bypassEmitAction: (params) =>
 									opts?.bypassEmitAction ? opts.bypassEmitAction(params) : nestedActionEvents.push(params),
-							}
+							},
 						);
 					}
 				}
@@ -362,31 +424,33 @@ export class RelationsService {
 	 */
 	async deleteOne(collection: string, field: string, opts?: MutationOptions): Promise<void> {
 		if (this.accountability && this.accountability.admin !== true) {
-			throw new ForbiddenException();
+			throw new ForbiddenError();
 		}
 
 		if (collection in this.schema.collections === false) {
-			throw new InvalidPayloadException(`Collection "${collection}" doesn't exist`);
+			throw new InvalidPayloadError({ reason: `Collection "${collection}" doesn't exist` });
 		}
 
 		if (field in this.schema.collections[collection]!.fields === false) {
-			throw new InvalidPayloadException(`Field "${field}" doesn't exist in collection "${collection}"`);
+			throw new InvalidPayloadError({ reason: `Field "${field}" doesn't exist in collection "${collection}"` });
 		}
 
 		const existingRelation = this.schema.relations.find(
-			(existingRelation) => existingRelation.collection === collection && existingRelation.field === field
+			(existingRelation) => existingRelation.collection === collection && existingRelation.field === field,
 		);
 
 		if (!existingRelation) {
-			throw new InvalidPayloadException(`Field "${field}" in collection "${collection}" doesn't have a relationship.`);
+			throw new InvalidPayloadError({
+				reason: `Field "${field}" in collection "${collection}" doesn't have a relationship.`,
+			});
 		}
 
 		const runPostColumnChange = await this.helpers.schema.preColumnChange();
 		const nestedActionEvents: ActionEventParams[] = [];
 
 		try {
-			await this.knex.transaction(async (trx) => {
-				const existingConstraints = await this.schemaInspector.foreignKeys();
+			await transaction(this.knex, async (trx) => {
+				const existingConstraints = await this.foreignKeys();
 				const constraintNames = existingConstraints.map((key) => key.constraint_name);
 
 				if (
@@ -442,15 +506,6 @@ export class RelationsService {
 	}
 
 	/**
-	 * Whether or not the current user has read access to relations
-	 */
-	private get hasReadAccess() {
-		return !!this.accountability?.permissions?.find((permission) => {
-			return permission.collection === 'directus_relations' && permission.action === 'read';
-		});
-	}
-
-	/**
 	 * Combine raw schema foreign key information with Directus relations meta rows to form final
 	 * Relation objects
 	 */
@@ -500,14 +555,15 @@ export class RelationsService {
 	private async filterForbidden(relations: Relation[]): Promise<Relation[]> {
 		if (this.accountability === null || this.accountability?.admin === true) return relations;
 
-		const allowedCollections =
-			this.accountability.permissions
-				?.filter((permission) => {
-					return permission.action === 'read';
-				})
-				.map(({ collection }) => collection) ?? [];
+		const allowedFields = await fetchAllowedFieldMap(
+			{
+				accountability: this.accountability,
+				action: 'read',
+			},
+			{ schema: this.schema, knex: this.knex },
+		);
 
-		const allowedFields = this.permissionsService.getAllowedFields('read');
+		const allowedCollections = Object.keys(allowedFields);
 
 		relations = toArray(relations);
 
@@ -562,7 +618,7 @@ export class RelationsService {
 	 *
 	 * @TODO This is a bit of a hack, and might be better of abstracted elsewhere
 	 */
-	private alterType(table: Knex.TableBuilder, relation: Partial<Relation>) {
+	private alterType(table: Knex.TableBuilder, relation: Partial<Relation>, nullable: boolean) {
 		const m2oFieldDBType = this.schema.collections[relation.collection!]!.fields[relation.field!]!.dbType;
 
 		const relatedFieldDBType =
@@ -571,7 +627,14 @@ export class RelationsService {
 			]!.dbType;
 
 		if (m2oFieldDBType !== relatedFieldDBType && m2oFieldDBType === 'int' && relatedFieldDBType === 'int unsigned') {
-			table.specificType(relation.field!, 'int unsigned').alter();
+			const alterField = table.specificType(relation.field!, 'int unsigned');
+
+			// Maintains the non-nullable state
+			if (!nullable) {
+				alterField.notNullable();
+			}
+
+			alterField.alter();
 		}
 	}
 }

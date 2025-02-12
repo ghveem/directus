@@ -1,14 +1,16 @@
 import { useCollectionsStore } from '@/stores/collections';
 import { getGroups } from '@/utils/get-groups';
+import { definePanel } from '@directus/extensions';
 import { Filter } from '@directus/types';
-import { definePanel } from '@directus/utils';
 import PanelTimeSeries from './panel-time-series.vue';
+import PreviewSVG from './preview.svg?raw';
 
 export default definePanel({
 	id: 'time-series',
 	name: '$t:panels.time_series.name',
 	description: '$t:panels.time_series.description',
 	icon: 'show_chart',
+	preview: PreviewSVG,
 	query(options) {
 		if (!options?.function || !options.valueField || !options.dateField) {
 			return;
@@ -35,7 +37,7 @@ export default definePanel({
 					[options.dateField]: {
 						_lte: `$NOW`,
 					},
-				}
+				},
 			);
 		}
 
@@ -369,6 +371,35 @@ export default definePanel({
 			},
 			schema: {
 				default_value: 'gradient',
+			},
+		},
+		{
+			field: 'missingData',
+			type: 'string',
+			name: '$t:panels.time_series.missing_data',
+			meta: {
+				interface: 'select-dropdown',
+				width: 'half',
+				options: {
+					choices: [
+						{
+							text: '$t:continuous',
+							value: 'ignore',
+						},
+						{
+							text: '$t:gap',
+							value: 'null',
+						},
+						{
+							text: '0',
+							value: '0',
+						},
+					],
+					allowOther: true,
+				},
+			},
+			schema: {
+				default_value: null,
 			},
 		},
 		{

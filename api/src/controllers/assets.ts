@@ -1,3 +1,5 @@
+import { useEnv } from '@directus/env';
+import { InvalidQueryError, RangeNotSatisfiableError } from '@directus/errors';
 import type { Range } from '@directus/storage';
 import { parseJSON } from '@directus/utils';
 import contentDisposition from 'content-disposition';
@@ -5,9 +7,7 @@ import { Router } from 'express';
 import { merge, pick } from 'lodash-es';
 import { ASSET_TRANSFORM_QUERY_KEYS, SYSTEM_ASSET_ALLOW_LIST } from '../constants.js';
 import getDatabase from '../database/index.js';
-import env from '../env.js';
-import { InvalidQueryException, RangeNotSatisfiableException } from '../exceptions/index.js';
-import logger from '../logger.js';
+import { useLogger } from '../logger/index.js';
 import useCollection from '../middleware/use-collection.js';
 import { AssetsService } from '../services/assets.js';
 import { PayloadService } from '../services/payload.js';
@@ -19,6 +19,8 @@ import { getConfigFromEnv } from '../utils/get-config-from-env.js';
 import { getMilliseconds } from '../utils/get-milliseconds.js';
 
 const router = Router();
+
+const env = useEnv();
 
 router.use(useCollection('directus_files'));
 
@@ -44,10 +46,6 @@ router.get(
 
 		const transformation = pick(req.query, ASSET_TRANSFORM_QUERY_KEYS);
 
-		if ('key' in transformation && Object.keys(transformation).length > 1) {
-			throw new InvalidQueryException(`You can't combine the "key" query parameter with any other transformation.`);
-		}
-
 		if ('transforms' in transformation) {
 			let transforms: unknown;
 
@@ -55,19 +53,23 @@ router.get(
 			try {
 				transforms = parseJSON(transformation['transforms'] as string);
 			} catch {
-				throw new InvalidQueryException(`"transforms" Parameter needs to be a JSON array of allowed transformations.`);
+				throw new InvalidQueryError({
+					reason: `"transforms" Parameter needs to be a JSON array of allowed transformations`,
+				});
 			}
 
 			// Check if it is actually an array.
 			if (!Array.isArray(transforms)) {
-				throw new InvalidQueryException(`"transforms" Parameter needs to be a JSON array of allowed transformations.`);
+				throw new InvalidQueryError({
+					reason: `"transforms" Parameter needs to be a JSON array of allowed transformations`,
+				});
 			}
 
 			// Check against ASSETS_TRANSFORM_MAX_OPERATIONS
 			if (transforms.length > Number(env['ASSETS_TRANSFORM_MAX_OPERATIONS'])) {
-				throw new InvalidQueryException(
-					`"transforms" Parameter is only allowed ${env['ASSETS_TRANSFORM_MAX_OPERATIONS']} transformations.`
-				);
+				throw new InvalidQueryError({
+					reason: `"transforms" Parameter is only allowed ${env['ASSETS_TRANSFORM_MAX_OPERATIONS']} transformations`,
+				});
 			}
 
 			// Check the transformations are valid
@@ -75,7 +77,9 @@ router.get(
 				const name = transform[0];
 
 				if (!TransformationMethods.includes(name)) {
-					throw new InvalidQueryException(`"transforms" Parameter does not allow "${name}" as a transformation.`);
+					throw new InvalidQueryError({
+						reason: `"transforms" Parameter does not allow "${name}" as a transformation`,
+					});
 				}
 			});
 
@@ -87,7 +91,7 @@ router.get(
 		const allKeys: string[] = [
 			...systemKeys,
 			...(assetSettings.storage_asset_presets || []).map(
-				(transformation: TransformationParams) => transformation['key']
+				(transformation: TransformationParams) => transformation['key'],
 			),
 		];
 
@@ -104,16 +108,26 @@ router.get(
 
 		if (assetSettings.storage_asset_transform === 'all') {
 			if (transformation['key'] && allKeys.includes(transformation['key'] as string) === false) {
-				throw new InvalidQueryException(`Key "${transformation['key']}" isn't configured.`);
+				throw new InvalidQueryError({ reason: `Key "${transformation['key']}" isn't configured` });
 			}
 
 			return next();
 		} else if (assetSettings.storage_asset_transform === 'presets') {
-			if (allKeys.includes(transformation['key'] as string)) return next();
-			throw new InvalidQueryException(`Only configured presets can be used in asset generation.`);
+			if (allKeys.includes(transformation['key'] as string) && Object.keys(transformation).length === 1) {
+				return next();
+			}
+
+			throw new InvalidQueryError({ reason: `Only configured presets can be used in asset generation` });
 		} else {
-			if (transformation['key'] && systemKeys.includes(transformation['key'] as string)) return next();
-			throw new InvalidQueryException(`Dynamic asset generation has been disabled for this project.`);
+			if (
+				transformation['key'] &&
+				systemKeys.includes(transformation['key'] as string) &&
+				Object.keys(transformation).length === 1
+			) {
+				return next();
+			}
+
+			throw new InvalidQueryError({ reason: `Dynamic asset generation has been disabled for this project` });
 		}
 	}),
 
@@ -125,16 +139,18 @@ router.get(
 				{
 					useDefaults: false,
 					directives: {
-						defaultSrc: ['none'],
+						defaultSrc: [`'none'`],
 					},
 				},
-				getConfigFromEnv('ASSETS_CONTENT_SECURITY_POLICY')
-			)
+				getConfigFromEnv('ASSETS_CONTENT_SECURITY_POLICY'),
+			),
 		)(req, res, next);
 	}),
 
 	// Return file
 	asyncHandler(async (req, res) => {
+		const logger = useLogger();
+
 		const id = req.params['pk']!.substring(0, 36);
 
 		const service = new AssetsService({
@@ -144,11 +160,12 @@ router.get(
 
 		const vary = ['Origin', 'Cache-Control'];
 
-		const transformationParams: TransformationParams = res.locals['transformation'].key
-			? (res.locals['shortcuts'] as TransformationParams[]).find(
-					(transformation) => transformation['key'] === res.locals['transformation'].key
-			  )
-			: res.locals['transformation'];
+		const transformationParams: TransformationParams = {
+			...(res.locals['shortcuts'] as TransformationParams[]).find(
+				(transformation) => transformation['key'] === res.locals['transformation']?.key,
+			),
+			...res.locals['transformation'],
+		};
 
 		let acceptFormat: TransformationFormat | undefined;
 
@@ -164,20 +181,23 @@ router.get(
 
 		let range: Range | undefined = undefined;
 
-		if (req.headers.range) {
+		if (req.headers.range && Object.keys(transformationParams).length === 0) {
 			const rangeParts = /bytes=([0-9]*)-([0-9]*)/.exec(req.headers.range);
 
 			if (rangeParts && rangeParts.length > 1) {
-				range = {};
+				range = {
+					start: undefined,
+					end: undefined,
+				};
 
 				if (rangeParts[1]) {
 					range.start = Number(rangeParts[1]);
-					if (Number.isNaN(range.start)) throw new RangeNotSatisfiableException(range);
+					if (Number.isNaN(range.start)) throw new RangeNotSatisfiableError({ range });
 				}
 
 				if (rangeParts[2]) {
 					range.end = Number(rangeParts[2]);
-					if (Number.isNaN(range.end)) throw new RangeNotSatisfiableException(range);
+					if (Number.isNaN(range.end)) throw new RangeNotSatisfiableError({ range });
 				}
 			}
 		}
@@ -218,40 +238,33 @@ router.get(
 			return res.end();
 		}
 
-		let isDataSent = false;
+		stream
+			.on('error', (error) => {
+				logger.error(error, `Couldn't stream file ${file.id} to the client`);
 
-		stream.on('data', (chunk) => {
-			isDataSent = true;
-			res.write(chunk);
-		});
+				if (!res.headersSent) {
+					res.removeHeader('Content-Type');
+					res.removeHeader('Content-Disposition');
+					res.removeHeader('Cache-Control');
 
-		stream.on('end', () => {
-			res.end();
-		});
-
-		stream.on('error', (e) => {
-			logger.error(e, `Couldn't stream file ${file.id} to the client`);
-
-			if (!isDataSent) {
-				res.removeHeader('Content-Type');
-				res.removeHeader('Content-Disposition');
-				res.removeHeader('Cache-Control');
-
-				res.status(500).json({
-					errors: [
-						{
-							message: 'An unexpected error occurred.',
-							extensions: {
-								code: 'INTERNAL_SERVER_ERROR',
+					res.status(500).json({
+						errors: [
+							{
+								message: 'An unexpected error occurred.',
+								extensions: {
+									code: 'INTERNAL_SERVER_ERROR',
+								},
 							},
-						},
-					],
-				});
-			}
-		});
+						],
+					});
+				} else {
+					res.end();
+				}
+			})
+			.pipe(res);
 
 		return undefined;
-	})
+	}),
 );
 
 export default router;

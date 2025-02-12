@@ -1,21 +1,12 @@
 ---
 description: Learn how to migrate your data model to a new Directus project using Hoppscotch.
-tags: []
-skill_level:
 directus_version: 9.23.0
-author_override:
 author: Kevin Lewis
 ---
 
 # Migrate Your Data Model with Hoppscotch
 
-> {{ $frontmatter.description }}
-
-:::tip Author: {{$frontmatter.author}}
-
-**Directus Version:** {{$frontmatter.directus_version}}
-
-:::
+<GuideMeta />
 
 ## Explanation
 
@@ -69,7 +60,7 @@ This section will create a "diff" that describes all differences between your so
 
 1. Make sure `POST` is selected in the method dropdown.
 2. In the URL field, enter your target Directus project URL followed by `/schema/apply`.
-3. In the Parameters tab, set a query parameter called `access_token` with the access token for your source project.
+3. In the Parameters tab, set a query parameter called `access_token` with the access token for your target project.
 4. In the Body tab, set the Content Type to `application/json` and paste the JSON response from the diff. You must only
    paste the contents of the `data` property.
 5. Click the **Send** button to send the request.

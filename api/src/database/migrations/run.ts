@@ -1,3 +1,4 @@
+import { useEnv } from '@directus/env';
 import formatTitle from '@directus/format-title';
 import fse from 'fs-extra';
 import type { Knex } from 'knex';
@@ -6,24 +7,26 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import path from 'path';
 import { flushCaches } from '../../cache.js';
-import env from '../../env.js';
-import logger from '../../logger.js';
+import { useLogger } from '../../logger/index.js';
 import type { Migration } from '../../types/index.js';
 import getModuleDefault from '../../utils/get-module-default.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default async function run(database: Knex, direction: 'up' | 'down' | 'latest', log = true): Promise<void> {
+	const env = useEnv();
+	const logger = useLogger();
+
 	let migrationFiles = await fse.readdir(__dirname);
 
-	const customMigrationsPath = path.resolve(env['EXTENSIONS_PATH'], 'migrations');
+	const customMigrationsPath = path.resolve(env['MIGRATIONS_PATH'] as string);
 
 	let customMigrationFiles =
 		((await fse.pathExists(customMigrationsPath)) && (await fse.readdir(customMigrationsPath))) || [];
 
 	migrationFiles = migrationFiles.filter((file: string) => /^[0-9]+[A-Z]-[^.]+\.(?:js|ts)$/.test(file));
 
-	customMigrationFiles = customMigrationFiles.filter((file: string) => /\.(c|m)?js$/.test(file));
+	customMigrationFiles = customMigrationFiles.filter((file: string) => file.includes('-') && /\.(c|m)?js$/.test(file));
 
 	const completedMigrations = await database.select<Migration[]>('*').from('directus_migrations').orderBy('version');
 
@@ -74,6 +77,10 @@ export default async function run(database: Knex, direction: 'up' | 'down' | 'la
 
 		const { up } = await import(`file://${nextVersion.file}`);
 
+		if (!up) {
+			logger.warn(`Couldn't find the "up" function from migration ${nextVersion.file}`);
+		}
+
 		if (log) {
 			logger.info(`Applying ${nextVersion.name}...`);
 		}
@@ -99,6 +106,10 @@ export default async function run(database: Knex, direction: 'up' | 'down' | 'la
 
 		const { down } = await import(`file://${migration.file}`);
 
+		if (!down) {
+			logger.warn(`Couldn't find the "down" function from migration ${migration.file}`);
+		}
+
 		if (log) {
 			logger.info(`Undoing ${migration.name}...`);
 		}
@@ -116,6 +127,10 @@ export default async function run(database: Knex, direction: 'up' | 'down' | 'la
 			if (migration.completed === false) {
 				needsCacheFlush = true;
 				const { up } = getModuleDefault(await import(`file://${migration.file}`));
+
+				if (!up) {
+					logger.warn(`Couldn't find the "up" function from migration ${migration.file}`);
+				}
 
 				if (log) {
 					logger.info(`Applying ${migration.name}...`);

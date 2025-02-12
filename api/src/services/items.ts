@@ -1,29 +1,36 @@
 import { Action } from '@directus/constants';
-import type { Accountability, PermissionsAction, Query, SchemaOverview } from '@directus/types';
+import { useEnv } from '@directus/env';
+import { ErrorCode, ForbiddenError, InvalidPayloadError, isDirectusError } from '@directus/errors';
+import { isSystemCollection } from '@directus/system-data';
+import type {
+	Accountability,
+	Item as AnyItem,
+	PermissionsAction,
+	PrimaryKey,
+	Query,
+	SchemaOverview,
+} from '@directus/types';
 import type Keyv from 'keyv';
 import type { Knex } from 'knex';
 import { assign, clone, cloneDeep, omit, pick, without } from 'lodash-es';
 import { getCache } from '../cache.js';
+import { translateDatabaseError } from '../database/errors/translate.js';
+import { getAstFromQuery } from '../database/get-ast-from-query/get-ast-from-query.js';
 import { getHelpers } from '../database/helpers/index.js';
 import getDatabase from '../database/index.js';
-import runAST from '../database/run-ast.js';
+import { runAst } from '../database/run-ast/run-ast.js';
 import emitter from '../emitter.js';
-import env from '../env.js';
-import { translateDatabaseError } from '../exceptions/database/translate.js';
-import { ForbiddenException, InvalidPayloadException } from '../exceptions/index.js';
-import type {
-	AbstractService,
-	AbstractServiceOptions,
-	ActionEventParams,
-	Item as AnyItem,
-	MutationOptions,
-	PrimaryKey,
-} from '../types/index.js';
-import getASTFromQuery from '../utils/get-ast-from-query.js';
+import { processAst } from '../permissions/modules/process-ast/process-ast.js';
+import { processPayload } from '../permissions/modules/process-payload/process-payload.js';
+import { validateAccess } from '../permissions/modules/validate-access/validate-access.js';
+import type { AbstractService, AbstractServiceOptions, ActionEventParams, MutationOptions } from '../types/index.js';
 import { shouldClearCache } from '../utils/should-clear-cache.js';
+import { transaction } from '../utils/transaction.js';
 import { validateKeys } from '../utils/validate-keys.js';
-import { AuthorizationService } from './authorization.js';
+import { UserIntegrityCheckFlag, validateUserCountIntegrity } from '../utils/validate-user-count-integrity.js';
 import { PayloadService } from './payload.js';
+
+const env = useEnv();
 
 export type QueryOptions = {
 	stripNonRequested?: boolean;
@@ -36,23 +43,44 @@ export type MutationTracker = {
 	getCount: () => number;
 };
 
-export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractService {
-	collection: string;
+export class ItemsService<Item extends AnyItem = AnyItem, Collection extends string = string>
+	implements AbstractService
+{
+	collection: Collection;
 	knex: Knex;
 	accountability: Accountability | null;
 	eventScope: string;
 	schema: SchemaOverview;
 	cache: Keyv<any> | null;
 
-	constructor(collection: string, options: AbstractServiceOptions) {
+	constructor(collection: Collection, options: AbstractServiceOptions) {
 		this.collection = collection;
 		this.knex = options.knex || getDatabase();
 		this.accountability = options.accountability || null;
-		this.eventScope = this.collection.startsWith('directus_') ? this.collection.substring(9) : 'items';
+		this.eventScope = isSystemCollection(this.collection) ? this.collection.substring(9) : 'items';
 		this.schema = options.schema;
 		this.cache = getCache().cache;
 
 		return this;
+	}
+
+	/**
+	 * Create a fork of the current service, allowing instantiation with different options.
+	 */
+	private fork(options?: Partial<AbstractServiceOptions>): ItemsService<AnyItem> {
+		const Service = this.constructor;
+
+		// ItemsService expects `collection` and `options` as parameters,
+		// while the other services only expect `options`
+		const isItemsService = Service.length === 2;
+
+		const newOptions = { knex: this.knex, accountability: this.accountability, schema: this.schema, ...options };
+
+		if (isItemsService) {
+			return new ItemsService(this.collection, newOptions);
+		}
+
+		return new (Service as new (options: AbstractServiceOptions) => this)(newOptions);
 	}
 
 	createMutationTracker(initialCount = 0): MutationTracker {
@@ -63,7 +91,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 				mutationCount += count;
 
 				if (mutationCount > maxCount) {
-					throw new InvalidPayloadException(`Exceeded max batch mutation limit of ${maxCount}.`);
+					throw new InvalidPayloadError({ reason: `Exceeded max batch mutation limit of ${maxCount}` });
 				}
 			},
 			getCount() {
@@ -116,19 +144,15 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 		// changes in the DB if any of the parts contained within throws an error. This also means
 		// that any errors thrown in any nested relational changes will bubble up and cancel the whole
 		// update tree
-		const primaryKey: PrimaryKey = await this.knex.transaction(async (trx) => {
-			// We're creating new services instances so they can use the transaction as their Knex interface
-			const payloadService = new PayloadService(this.collection, {
+		const primaryKey: PrimaryKey = await transaction(this.knex, async (trx) => {
+			const serviceOptions: AbstractServiceOptions = {
 				accountability: this.accountability,
 				knex: trx,
 				schema: this.schema,
-			});
+			};
 
-			const authorizationService = new AuthorizationService({
-				accountability: this.accountability,
-				knex: trx,
-				schema: this.schema,
-			});
+			// We're creating new services instances so they can use the transaction as their Knex interface
+			const payloadService = new PayloadService(this.collection, serviceOptions);
 
 			// Run all hooks that are attached to this event so the end user has the chance to augment the
 			// item that is about to be saved
@@ -146,35 +170,70 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 								database: trx,
 								schema: this.schema,
 								accountability: this.accountability,
-							}
+							},
 					  )
 					: payload;
 
 			const payloadWithPresets = this.accountability
-				? authorizationService.validatePayload('create', this.collection, payloadAfterHooks)
+				? await processPayload(
+						{
+							accountability: this.accountability,
+							action: 'create',
+							collection: this.collection,
+							payload: payloadAfterHooks,
+						},
+						{
+							knex: trx,
+							schema: this.schema,
+						},
+				  )
 				: payloadAfterHooks;
 
-			if (opts.preMutationException) {
-				throw opts.preMutationException;
+			if (opts.preMutationError) {
+				throw opts.preMutationError;
 			}
 
 			const {
 				payload: payloadWithM2O,
 				revisions: revisionsM2O,
 				nestedActionEvents: nestedActionEventsM2O,
+				userIntegrityCheckFlags: userIntegrityCheckFlagsM2O,
 			} = await payloadService.processM2O(payloadWithPresets, opts);
 
 			const {
 				payload: payloadWithA2O,
 				revisions: revisionsA2O,
 				nestedActionEvents: nestedActionEventsA2O,
+				userIntegrityCheckFlags: userIntegrityCheckFlagsA2O,
 			} = await payloadService.processA2O(payloadWithM2O, opts);
 
 			const payloadWithoutAliases = pick(payloadWithA2O, without(fields, ...aliases));
 			const payloadWithTypeCasting = await payloadService.processValues('create', payloadWithoutAliases);
 
-			// In case of manual string / UUID primary keys, the PK already exists in the object we're saving.
-			let primaryKey = payloadWithTypeCasting[primaryKeyField];
+			// The primary key can already exist in the payload.
+			// In case of manual string / UUID primary keys it's always provided at this point.
+			// In case of an (big) integer primary key, it might be provided as the user can specify the value manually.
+			let primaryKey: undefined | PrimaryKey = payloadWithTypeCasting[primaryKeyField];
+
+			if (primaryKey) {
+				validateKeys(this.schema, this.collection, primaryKeyField, primaryKey);
+			}
+
+			// If a PK of type number was provided, although the PK is set the auto_increment,
+			// depending on the database, the sequence might need to be reset to protect future PK collisions.
+			let autoIncrementSequenceNeedsToBeReset = false;
+
+			const pkField = this.schema.collections[this.collection]!.fields[primaryKeyField];
+
+			if (
+				primaryKey &&
+				pkField &&
+				!opts.bypassAutoIncrementSequenceReset &&
+				['integer', 'bigInteger'].includes(pkField.type) &&
+				pkField.defaultValue === 'AUTO_INCREMENT'
+			) {
+				autoIncrementSequenceNeedsToBeReset = true;
+			}
 
 			try {
 				const result = await trx
@@ -185,13 +244,23 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 
 				const returnedKey = typeof result === 'object' ? result[primaryKeyField] : result;
 
-				if (this.schema.collections[this.collection]!.fields[primaryKeyField]!.type === 'uuid') {
+				if (pkField!.type === 'uuid') {
 					primaryKey = getHelpers(trx).schema.formatUUID(primaryKey ?? returnedKey);
 				} else {
 					primaryKey = primaryKey ?? returnedKey;
 				}
 			} catch (err: any) {
-				throw await translateDatabaseError(err);
+				const dbError = await translateDatabaseError(err);
+
+				if (isDirectusError(dbError, ErrorCode.RecordNotUnique) && dbError.extensions.primaryKey) {
+					// This is a MySQL specific thing we need to handle here, since MySQL does not return the field name
+					// if the unique constraint is the primary key
+					dbError.extensions.field = pkField?.field ?? null;
+
+					delete dbError.extensions.primaryKey;
+				}
+
+				throw dbError;
 			}
 
 			// Most database support returning, those who don't tend to return the PK anyways
@@ -206,15 +275,32 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 				payload[primaryKeyField] = primaryKey;
 			}
 
-			const { revisions: revisionsO2M, nestedActionEvents: nestedActionEventsO2M } = await payloadService.processO2M(
-				payloadWithPresets,
-				primaryKey,
-				opts
-			);
+			// At this point, the primary key is guaranteed to be set.
+			primaryKey = primaryKey as PrimaryKey;
+
+			const {
+				revisions: revisionsO2M,
+				nestedActionEvents: nestedActionEventsO2M,
+				userIntegrityCheckFlags: userIntegrityCheckFlagsO2M,
+			} = await payloadService.processO2M(payloadWithPresets, primaryKey, opts);
 
 			nestedActionEvents.push(...nestedActionEventsM2O);
 			nestedActionEvents.push(...nestedActionEventsA2O);
 			nestedActionEvents.push(...nestedActionEventsO2M);
+
+			const userIntegrityCheckFlags =
+				(opts.userIntegrityCheckFlags ?? UserIntegrityCheckFlag.None) |
+				userIntegrityCheckFlagsM2O |
+				userIntegrityCheckFlagsA2O |
+				userIntegrityCheckFlagsO2M;
+
+			if (userIntegrityCheckFlags) {
+				if (opts.onRequireUserIntegrityCheck) {
+					opts.onRequireUserIntegrityCheck(userIntegrityCheckFlags);
+				} else {
+					await validateUserCountIntegrity({ flags: userIntegrityCheckFlags, knex: trx });
+				}
+			}
 
 			// If this is an authenticated action, and accountability tracking is enabled, save activity row
 			if (this.accountability && this.schema.collections[this.collection]!.accountability !== null) {
@@ -263,6 +349,10 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 				}
 			}
 
+			if (autoIncrementSequenceNeedsToBeReset) {
+				await getHelpers(trx).sequence.resetAutoIncrementSequence(this.collection, primaryKeyField);
+			}
+
 			return primaryKey;
 		});
 
@@ -308,29 +398,49 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 
 	/**
 	 * Create multiple new items at once. Inserts all provided records sequentially wrapped in a transaction.
+	 *
+	 * Uses `this.createOne` under the hood.
 	 */
 	async createMany(data: Partial<Item>[], opts: MutationOptions = {}): Promise<PrimaryKey[]> {
 		if (!opts.mutationTracker) opts.mutationTracker = this.createMutationTracker();
 
-		const { primaryKeys, nestedActionEvents } = await this.knex.transaction(async (trx) => {
-			const service = new ItemsService(this.collection, {
-				accountability: this.accountability,
-				schema: this.schema,
-				knex: trx,
-			});
+		const { primaryKeys, nestedActionEvents } = await transaction(this.knex, async (knex) => {
+			const service = this.fork({ knex });
+
+			let userIntegrityCheckFlags = opts.userIntegrityCheckFlags ?? UserIntegrityCheckFlag.None;
 
 			const primaryKeys: PrimaryKey[] = [];
 			const nestedActionEvents: ActionEventParams[] = [];
 
-			for (const payload of data) {
+			const pkField = this.schema.collections[this.collection]!.primary;
+
+			for (const [index, payload] of data.entries()) {
+				let bypassAutoIncrementSequenceReset = true;
+
+				// the auto_increment sequence needs to be reset if the current item contains a manual PK and
+				// if it's the last item of the batch or if the next item doesn't include a PK and hence one needs to be generated
+				if (payload[pkField] && (index === data.length - 1 || !data[index + 1]?.[pkField])) {
+					bypassAutoIncrementSequenceReset = false;
+				}
+
 				const primaryKey = await service.createOne(payload, {
 					...(opts || {}),
 					autoPurgeCache: false,
+					onRequireUserIntegrityCheck: (flags) => (userIntegrityCheckFlags |= flags),
 					bypassEmitAction: (params) => nestedActionEvents.push(params),
 					mutationTracker: opts.mutationTracker,
+					bypassAutoIncrementSequenceReset,
 				});
 
 				primaryKeys.push(primaryKey);
+			}
+
+			if (userIntegrityCheckFlags) {
+				if (opts.onRequireUserIntegrityCheck) {
+					opts.onRequireUserIntegrityCheck(userIntegrityCheckFlags);
+				} else {
+					await validateUserCountIntegrity({ flags: userIntegrityCheckFlags, knex });
+				}
 			}
 
 			return { primaryKeys, nestedActionEvents };
@@ -354,7 +464,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Get items by query
+	 * Get items by query.
 	 */
 	async readByQuery(query: Query, opts?: QueryOptions): Promise<Item[]> {
 		const updatedQuery =
@@ -371,37 +481,36 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 							database: this.knex,
 							schema: this.schema,
 							accountability: this.accountability,
-						}
+						},
 				  )
 				: query;
 
-		let ast = await getASTFromQuery(this.collection, updatedQuery, this.schema, {
-			accountability: this.accountability,
-			// By setting the permissions action, you can read items using the permissions for another
-			// operation's permissions. This is used to dynamically check if you have update/delete
-			// access to (a) certain item(s)
-			action: opts?.permissionsAction || 'read',
-			knex: this.knex,
-		});
-
-		if (this.accountability && this.accountability.admin !== true) {
-			const authorizationService = new AuthorizationService({
+		let ast = await getAstFromQuery(
+			{
+				collection: this.collection,
+				query: updatedQuery,
 				accountability: this.accountability,
-				knex: this.knex,
+			},
+			{
 				schema: this.schema,
-			});
+				knex: this.knex,
+			},
+		);
 
-			ast = await authorizationService.processAST(ast, opts?.permissionsAction);
-		}
+		ast = await processAst(
+			{ ast, action: 'read', accountability: this.accountability },
+			{ knex: this.knex, schema: this.schema },
+		);
 
-		const records = await runAST(ast, this.schema, {
+		const records = await runAst(ast, this.schema, this.accountability, {
 			knex: this.knex,
 			// GraphQL requires relational keys to be returned regardless
 			stripNonRequested: opts?.stripNonRequested !== undefined ? opts.stripNonRequested : true,
 		});
 
+		// TODO when would this happen?
 		if (records === null) {
-			throw new ForbiddenException();
+			throw new ForbiddenError();
 		}
 
 		const filteredRecords =
@@ -417,7 +526,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 							database: this.knex,
 							schema: this.schema,
 							accountability: this.accountability,
-						}
+						},
 				  )
 				: records;
 
@@ -433,7 +542,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 					database: this.knex || getDatabase(),
 					schema: this.schema,
 					accountability: this.accountability,
-				}
+				},
 			);
 		}
 
@@ -441,7 +550,9 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Get single item by primary key
+	 * Get single item by primary key.
+	 *
+	 * Uses `this.readByQuery` under the hood.
 	 */
 	async readOne(key: PrimaryKey, query: Query = {}, opts?: QueryOptions): Promise<Item> {
 		const primaryKeyField = this.schema.collections[this.collection]!.primary;
@@ -453,14 +564,16 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 		const results = await this.readByQuery(queryWithKey, opts);
 
 		if (results.length === 0) {
-			throw new ForbiddenException();
+			throw new ForbiddenError();
 		}
 
 		return results[0]!;
 	}
 
 	/**
-	 * Get multiple items by primary keys
+	 * Get multiple items by primary keys.
+	 *
+	 * Uses `this.readByQuery` under the hood.
 	 */
 	async readMany(keys: PrimaryKey[], query: Query = {}, opts?: QueryOptions): Promise<Item[]> {
 		const primaryKeyField = this.schema.collections[this.collection]!.primary;
@@ -480,7 +593,9 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Update multiple items by query
+	 * Update multiple items by query.
+	 *
+	 * Uses `this.updateMany` under the hood.
 	 */
 	async updateByQuery(query: Query, data: Partial<Item>, opts?: MutationOptions): Promise<PrimaryKey[]> {
 		const keys = await this.getKeysByQuery(query);
@@ -492,7 +607,9 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Update a single item by primary key
+	 * Update a single item by primary key.
+	 *
+	 * Uses `this.updateMany` under the hood.
 	 */
 	async updateOne(key: PrimaryKey, data: Partial<Item>, opts?: MutationOptions): Promise<PrimaryKey> {
 		const primaryKeyField = this.schema.collections[this.collection]!.primary;
@@ -503,11 +620,13 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Update multiple items in a single transaction
+	 * Update multiple items in a single transaction.
+	 *
+	 * Uses `this.updateOne` under the hood.
 	 */
 	async updateBatch(data: Partial<Item>[], opts: MutationOptions = {}): Promise<PrimaryKey[]> {
 		if (!Array.isArray(data)) {
-			throw new InvalidPayloadException('Input should be an array of items.');
+			throw new InvalidPayloadError({ reason: 'Input should be an array of items' });
 		}
 
 		if (!opts.mutationTracker) opts.mutationTracker = this.createMutationTracker();
@@ -517,17 +636,30 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 		const keys: PrimaryKey[] = [];
 
 		try {
-			await this.knex.transaction(async (trx) => {
-				const service = new ItemsService(this.collection, {
-					accountability: this.accountability,
-					knex: trx,
-					schema: this.schema,
-				});
+			await transaction(this.knex, async (knex) => {
+				const service = this.fork({ knex });
+
+				let userIntegrityCheckFlags = opts.userIntegrityCheckFlags ?? UserIntegrityCheckFlag.None;
 
 				for (const item of data) {
-					if (!item[primaryKeyField]) throw new InvalidPayloadException(`Item in update misses primary key.`);
-					const combinedOpts = Object.assign({ autoPurgeCache: false }, opts);
-					keys.push(await service.updateOne(item[primaryKeyField]!, omit(item, primaryKeyField), combinedOpts));
+					const primaryKey = item[primaryKeyField];
+					if (!primaryKey) throw new InvalidPayloadError({ reason: `Item in update misses primary key` });
+
+					const combinedOpts: MutationOptions = {
+						autoPurgeCache: false,
+						...opts,
+						onRequireUserIntegrityCheck: (flags) => (userIntegrityCheckFlags |= flags),
+					};
+
+					keys.push(await service.updateOne(primaryKey, omit(item, primaryKeyField), combinedOpts));
+				}
+
+				if (userIntegrityCheckFlags) {
+					if (opts.onRequireUserIntegrityCheck) {
+						opts.onRequireUserIntegrityCheck(userIntegrityCheckFlags);
+					} else {
+						await validateUserCountIntegrity({ flags: userIntegrityCheckFlags, knex });
+					}
 				}
 			});
 		} finally {
@@ -540,7 +672,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Update many items by primary key, setting all items to the same change
+	 * Update many items by primary key, setting all items to the same change.
 	 */
 	async updateMany(keys: PrimaryKey[], data: Partial<Item>, opts: MutationOptions = {}): Promise<PrimaryKey[]> {
 		if (!opts.mutationTracker) opts.mutationTracker = this.createMutationTracker();
@@ -564,12 +696,6 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 		const payload: Partial<AnyItem> = cloneDeep(data);
 		const nestedActionEvents: ActionEventParams[] = [];
 
-		const authorizationService = new AuthorizationService({
-			accountability: this.accountability,
-			knex: this.knex,
-			schema: this.schema,
-		});
-
 		// Run all hooks that are attached to this event so the end user has the chance to augment the
 		// item that is about to be saved
 		const payloadAfterHooks =
@@ -587,7 +713,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 							database: this.knex,
 							schema: this.schema,
 							accountability: this.accountability,
-						}
+						},
 				  )
 				: payload;
 
@@ -595,18 +721,41 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 		keys.sort();
 
 		if (this.accountability) {
-			await authorizationService.checkAccess('update', this.collection, keys);
+			await validateAccess(
+				{
+					accountability: this.accountability,
+					action: 'update',
+					collection: this.collection,
+					primaryKeys: keys,
+					fields: Object.keys(payloadAfterHooks),
+				},
+				{
+					schema: this.schema,
+					knex: this.knex,
+				},
+			);
 		}
 
 		const payloadWithPresets = this.accountability
-			? authorizationService.validatePayload('update', this.collection, payloadAfterHooks)
+			? await processPayload(
+					{
+						accountability: this.accountability,
+						action: 'update',
+						collection: this.collection,
+						payload: payloadAfterHooks,
+					},
+					{
+						knex: this.knex,
+						schema: this.schema,
+					},
+			  )
 			: payloadAfterHooks;
 
-		if (opts.preMutationException) {
-			throw opts.preMutationException;
+		if (opts.preMutationError) {
+			throw opts.preMutationError;
 		}
 
-		await this.knex.transaction(async (trx) => {
+		await transaction(this.knex, async (trx) => {
 			const payloadService = new PayloadService(this.collection, {
 				accountability: this.accountability,
 				knex: trx,
@@ -617,12 +766,14 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 				payload: payloadWithM2O,
 				revisions: revisionsM2O,
 				nestedActionEvents: nestedActionEventsM2O,
+				userIntegrityCheckFlags: userIntegrityCheckFlagsM2O,
 			} = await payloadService.processM2O(payloadWithPresets, opts);
 
 			const {
 				payload: payloadWithA2O,
 				revisions: revisionsA2O,
 				nestedActionEvents: nestedActionEventsA2O,
+				userIntegrityCheckFlags: userIntegrityCheckFlagsA2O,
 			} = await payloadService.processA2O(payloadWithM2O, opts);
 
 			const payloadWithoutAliasAndPK = pick(payloadWithA2O, without(fields, primaryKeyField, ...aliases));
@@ -638,18 +789,33 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 
 			const childrenRevisions = [...revisionsM2O, ...revisionsA2O];
 
+			let userIntegrityCheckFlags =
+				opts.userIntegrityCheckFlags ??
+				UserIntegrityCheckFlag.None | userIntegrityCheckFlagsM2O | userIntegrityCheckFlagsA2O;
+
 			nestedActionEvents.push(...nestedActionEventsM2O);
 			nestedActionEvents.push(...nestedActionEventsA2O);
 
 			for (const key of keys) {
-				const { revisions, nestedActionEvents: nestedActionEventsO2M } = await payloadService.processO2M(
-					payload,
-					key,
-					opts
-				);
+				const {
+					revisions,
+					nestedActionEvents: nestedActionEventsO2M,
+					userIntegrityCheckFlags: userIntegrityCheckFlagsO2M,
+				} = await payloadService.processO2M(payloadWithA2O, key, opts);
 
 				childrenRevisions.push(...revisions);
 				nestedActionEvents.push(...nestedActionEventsO2M);
+				userIntegrityCheckFlags |= userIntegrityCheckFlagsO2M;
+			}
+
+			if (userIntegrityCheckFlags) {
+				if (opts?.onRequireUserIntegrityCheck) {
+					opts.onRequireUserIntegrityCheck(userIntegrityCheckFlags);
+				} else {
+					// Having no onRequireUserIntegrityCheck callback indicates that
+					// this is the top level invocation of the nested updates, so perform the user integrity check
+					await validateUserCountIntegrity({ flags: userIntegrityCheckFlags, knex: trx });
+				}
 			}
 
 			// If this is an authenticated action, and accountability tracking is enabled, save activity row
@@ -669,7 +835,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 						origin: this.accountability!.origin,
 						item: key,
 					})),
-					{ bypassLimits: true }
+					{ bypassLimits: true },
 				);
 
 				if (this.schema.collections[this.collection]!.accountability === 'all') {
@@ -694,7 +860,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 								data:
 									snapshots && Array.isArray(snapshots) ? JSON.stringify(snapshots[index]) : JSON.stringify(snapshots),
 								delta: await payloadService.prepareDelta(payloadWithTypeCasting),
-							}))
+							})),
 						)
 					).filter((revision) => revision.delta);
 
@@ -732,7 +898,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 						? ['items.update', `${this.collection}.items.update`]
 						: `${this.eventScope}.update`,
 				meta: {
-					payload,
+					payload: payloadWithPresets,
 					keys,
 					collection: this.collection,
 				},
@@ -762,7 +928,9 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Upsert a single item
+	 * Upsert a single item.
+	 *
+	 * Uses `this.createOne` / `this.updateOne` under the hood.
 	 */
 	async upsertOne(payload: Partial<Item>, opts?: MutationOptions): Promise<PrimaryKey> {
 		const primaryKeyField = this.schema.collections[this.collection]!.primary;
@@ -781,24 +949,23 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 				.first());
 
 		if (exists) {
-			return await this.updateOne(primaryKey as PrimaryKey, payload, opts);
+			const { [primaryKeyField]: _, ...data } = payload;
+			return await this.updateOne(primaryKey as PrimaryKey, data as Partial<Item>, opts);
 		} else {
 			return await this.createOne(payload, opts);
 		}
 	}
 
 	/**
-	 * Upsert many items
+	 * Upsert many items.
+	 *
+	 * Uses `this.upsertOne` under the hood.
 	 */
 	async upsertMany(payloads: Partial<Item>[], opts: MutationOptions = {}): Promise<PrimaryKey[]> {
 		if (!opts.mutationTracker) opts.mutationTracker = this.createMutationTracker();
 
-		const primaryKeys = await this.knex.transaction(async (trx) => {
-			const service = new ItemsService(this.collection, {
-				accountability: this.accountability,
-				schema: this.schema,
-				knex: trx,
-			});
+		const primaryKeys = await transaction(this.knex, async (knex) => {
+			const service = this.fork({ knex });
 
 			const primaryKeys: PrimaryKey[] = [];
 
@@ -818,7 +985,9 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Delete multiple items by query
+	 * Delete multiple items by query.
+	 *
+	 * Uses `this.deleteMany` under the hood.
 	 */
 	async deleteByQuery(query: Query, opts?: MutationOptions): Promise<PrimaryKey[]> {
 		const keys = await this.getKeysByQuery(query);
@@ -830,7 +999,9 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Delete a single item by primary key
+	 * Delete a single item by primary key.
+	 *
+	 * Uses `this.deleteMany` under the hood.
 	 */
 	async deleteOne(key: PrimaryKey, opts?: MutationOptions): Promise<PrimaryKey> {
 		const primaryKeyField = this.schema.collections[this.collection]!.primary;
@@ -841,7 +1012,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Delete multiple items by primary key
+	 * Delete multiple items by primary key.
 	 */
 	async deleteMany(keys: PrimaryKey[], opts: MutationOptions = {}): Promise<PrimaryKey[]> {
 		if (!opts.mutationTracker) opts.mutationTracker = this.createMutationTracker();
@@ -855,18 +1026,23 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 		const primaryKeyField = this.schema.collections[this.collection]!.primary;
 		validateKeys(this.schema, this.collection, primaryKeyField, keys);
 
-		if (this.accountability && this.accountability.admin !== true) {
-			const authorizationService = new AuthorizationService({
-				accountability: this.accountability,
-				schema: this.schema,
-				knex: this.knex,
-			});
-
-			await authorizationService.checkAccess('delete', this.collection, keys);
+		if (this.accountability) {
+			await validateAccess(
+				{
+					accountability: this.accountability,
+					action: 'delete',
+					collection: this.collection,
+					primaryKeys: keys,
+				},
+				{
+					knex: this.knex,
+					schema: this.schema,
+				},
+			);
 		}
 
-		if (opts.preMutationException) {
-			throw opts.preMutationException;
+		if (opts.preMutationError) {
+			throw opts.preMutationError;
 		}
 
 		if (opts.emitEvents !== false) {
@@ -880,12 +1056,20 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 					database: this.knex,
 					schema: this.schema,
 					accountability: this.accountability,
-				}
+				},
 			);
 		}
 
-		await this.knex.transaction(async (trx) => {
+		await transaction(this.knex, async (trx) => {
 			await trx(this.collection).whereIn(primaryKeyField, keys).delete();
+
+			if (opts.userIntegrityCheckFlags) {
+				if (opts.onRequireUserIntegrityCheck) {
+					opts.onRequireUserIntegrityCheck(opts.userIntegrityCheckFlags);
+				} else {
+					await validateUserCountIntegrity({ flags: opts.userIntegrityCheckFlags, knex: trx });
+				}
+			}
 
 			if (this.accountability && this.schema.collections[this.collection]!.accountability !== null) {
 				const activityService = new ActivityService({
@@ -903,7 +1087,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 						origin: this.accountability!.origin,
 						item: key,
 					})),
-					{ bypassLimits: true }
+					{ bypassLimits: true },
 				);
 			}
 		});
@@ -941,7 +1125,7 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Read/treat collection as singleton
+	 * Read/treat collection as singleton.
 	 */
 	async readSingleton(query: Query, opts?: QueryOptions): Promise<Partial<Item>> {
 		query = clone(query);
@@ -977,7 +1161,9 @@ export class ItemsService<Item extends AnyItem = AnyItem> implements AbstractSer
 	}
 
 	/**
-	 * Upsert/treat collection as singleton
+	 * Upsert/treat collection as singleton.
+	 *
+	 * Uses `this.createOne` / `this.updateOne` under the hood.
 	 */
 	async upsertSingleton(data: Partial<Item>, opts?: MutationOptions): Promise<PrimaryKey> {
 		const primaryKeyField = this.schema.collections[this.collection]!.primary;

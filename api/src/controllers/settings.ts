@@ -1,5 +1,6 @@
+import { isDirectusError } from '@directus/errors';
 import express from 'express';
-import { ForbiddenException } from '../exceptions/index.js';
+import { ErrorCode } from '@directus/errors';
 import { respond } from '../middleware/respond.js';
 import useCollection from '../middleware/use-collection.js';
 import { SettingsService } from '../services/settings.js';
@@ -21,7 +22,7 @@ router.get(
 		res.locals['payload'] = { data: records || null };
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.patch(
@@ -38,7 +39,7 @@ router.patch(
 			const record = await service.readSingleton(req.sanitizedQuery);
 			res.locals['payload'] = { data: record || null };
 		} catch (error: any) {
-			if (error instanceof ForbiddenException) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
 				return next();
 			}
 
@@ -47,7 +48,7 @@ router.patch(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 export default router;

@@ -31,20 +31,30 @@ export class StorageManager {
 	}
 }
 
-export type Range = {
-	start?: number;
-	end?: number;
-};
+export interface Range {
+	start: number | undefined;
+	end: number | undefined;
+}
 
 export type Stat = {
 	size: number;
 	modified: Date;
 };
 
+export type ReadOptions = {
+	range?: Range | undefined;
+	version?: string | undefined;
+};
+
+export type ChunkedUploadContext = {
+	size?: number | undefined;
+	metadata: Record<string, string | null> | undefined;
+};
+
 export declare class Driver {
 	constructor(config: Record<string, unknown>);
 
-	read(filepath: string, range?: Range): Promise<Readable>;
+	read(filepath: string, options?: ReadOptions): Promise<Readable>;
 	write(filepath: string, content: Readable, type?: string): Promise<void>;
 	delete(filepath: string): Promise<void>;
 	stat(filepath: string): Promise<Stat>;
@@ -52,6 +62,19 @@ export declare class Driver {
 	move(src: string, dest: string): Promise<void>;
 	copy(src: string, dest: string): Promise<void>;
 	list(prefix?: string): AsyncIterable<string>;
+}
+
+export interface TusDriver extends Driver {
+	get tusExtensions(): string[];
+
+	createChunkedUpload(filepath: string, context: ChunkedUploadContext): Promise<ChunkedUploadContext>;
+	finishChunkedUpload(filepath: string, context: ChunkedUploadContext): Promise<void>;
+	deleteChunkedUpload(filepath: string, context: ChunkedUploadContext): Promise<void>;
+	writeChunk(filepath: string, content: Readable, offset: number, context: ChunkedUploadContext): Promise<number>;
+}
+
+export function supportsTus(driver: Driver): driver is TusDriver {
+	return 'tusExtensions' in driver;
 }
 
 export type DriverConfig = {

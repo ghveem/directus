@@ -7,9 +7,7 @@ pageClass: page-reference
 # Fields
 
 > Fields are individual pieces of content within an item. They are mapped to columns in the database.
-> [Learn more about Fields](/getting-started/glossary#fields).
-
----
+> [Learn more about Fields](/user-guide/overview/glossary#fields).
 
 ## The Field Object
 
@@ -20,11 +18,11 @@ Name of the collection the field resides in.
 The identifier of the field. This matches the table column name.
 
 `type` **string**\
-The Directus data type of the field. See [Types](/getting-started/glossary#types) for possible options.
+The Directus data type of the field. See [Types](/user-guide/overview/glossary#types) for possible options.
 
 #### Meta
 
-Directus metadata, primarily used in the Admin App. Meta is optional.
+Directus metadata, primarily used in the Data Studio. Meta is optional.
 
 `id` **integer**\
 Primary key of the metadata row in `directus_fields`.
@@ -51,29 +49,32 @@ The display used for this field.
 The configured options for the used display.
 
 `readonly` **boolean**\
-If the field is considered readonly in the Admin App.
+If the field is considered readonly in the Data Studio.
+
+`required` **boolean**\
+If the field is considered required in the Data Studio.
 
 `hidden` **boolean**\
-If the field is hidden from the edit page in the Admin App.
+If the field is hidden from the edit page in the Data Studio.
 
 `sort` **integer**\
-Where this field is shown on the edit page in the Admin App.
+Where this field is shown on the edit page in the Data Studio.
 
 `width` **string**\
-How wide the interface is rendered on the edit page in the Admin App. One of `half`, `half-left`, `half-right`, `half-space`,
+How wide the interface is rendered on the edit page in the Data Studio. One of `half`, `half-left`, `half-right`, `half-space`,
 `full`, `fill`.
 
 `translations` **array**\
-How this field's name is displayed in the different languages in the Admin App.
+How this field's name is displayed in the different languages in the Data Studio.
 
 `note` **string**\
-Short description displayed in the Admin App.
+Short description displayed in the Data Studio.
 
 #### Schema
 
 "Raw" database information. Based on the database vendor used, different information might be returned. The following
 are available for all drivers. Note: schema is optional. If a field exist in directus_fields, but not in the database,
-it's an alias commonly used for relational (O2M) or presentation purposes in the Admin App.
+it's an alias commonly used for relational (O2M) or presentation purposes in the Data Studio.
 
 `name` **string**\
 Identifier of the field. Matches the column name in the database.
@@ -96,8 +97,20 @@ Precision for integer/float/decimal type fields.
 `numeric_scale` **integer**\
 Scale for integer/float/decimal type fields.
 
+`is_generated` **boolean**\
+Whether or not it is a generated column on the part of the database.
+
+`generation_expression` **string**\
+The database level expression used for computing the column, in case it is a generated column.
+
 `is_nullable` **boolean**\
 Whether or not the column is nullable. This is what is used as the "required" state in Directus.
+
+`is_unique` **boolean**\
+Whether or not the column has a unique constraint.
+
+`is_indexed` **boolean**\
+Whether or not the column is indexed.
 
 `is_primary_key` **boolean**\
 Whether or not the field is the primary key of the table.
@@ -126,6 +139,7 @@ Comment as stored in the database.
 		"display": null,
 		"display_options": null,
 		"readonly": true,
+		"required": true,
 		"hidden": true,
 		"sort": 1,
 		"width": "full",
@@ -140,7 +154,11 @@ Comment as stored in the database.
 		"max_length": null,
 		"numeric_precision": 32,
 		"numeric_scale": 0,
+		"is_generated": false,
+		"generation_expression": null,
 		"is_nullable": false,
+		"is_unique": false,
+		"is_indexed": true,
 		"is_primary_key": true,
 		"has_auto_increment": true,
 		"foreign_key_column": null,
@@ -150,31 +168,21 @@ Comment as stored in the database.
 }
 ```
 
----
-
 ## List All Fields
 
 List the available fields.
 
-### Query Parameters
+### Request
 
-This endpoint doesn't currently support any query parameters.
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
 
-### Returns
+`GET /fields`
 
-An array of [field objects](#the-field-object).
+</template>
+<template #graphql>
 
-### REST API
-
-```
-GET /fields
-```
-
-### GraphQL
-
-```
-POST /graphql/system
-```
+`POST /graphql/system`
 
 ```graphql
 type Query {
@@ -182,7 +190,39 @@ type Query {
 }
 ```
 
-##### Example
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, readFields } from '@directus/sdk';
+
+const client = createDirectus('directus_project_url').with(rest());
+
+const result = await client.request(readFields());
+```
+
+</template>
+</SnippetToggler>
+
+#### Query Parameters
+
+This endpoint doesn't currently support any query parameters.
+
+### Response
+
+An array of [field objects](#the-field-object).
+
+### Example
+
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
+
+`GET /fields`
+
+</template>
+<template #graphql>
+
+`POST /graphql/system`
 
 ```graphql
 query {
@@ -193,37 +233,35 @@ query {
 }
 ```
 
----
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, readFields } from '@directus/sdk';
+
+const client = createDirectus('directus_project_url').with(rest());
+
+const result = await client.request(readFields());
+```
+
+</template>
+</SnippetToggler>
 
 ## List Fields in Collection
 
 List the available fields in a given collection.
 
-### Query Parameters
+### Request
 
-This endpoint doesn't currently support any query parameters.
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
 
-### Returns
+`GET /fields/:collection`
 
-An array of [field objects](#the-field-object).
+</template>
+<template #graphql>
 
-### REST API
-
-```
-GET /fields/:collection
-```
-
-##### Example
-
-```
-GET /fields/articles
-```
-
-### GraphQL
-
-```
-POST /graphql/system
-```
+`POST /graphql/system`
 
 ```graphql
 type Query {
@@ -231,7 +269,39 @@ type Query {
 }
 ```
 
-##### Example
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, readFieldsByCollection } from '@directus/sdk';
+
+const client = createDirectus('directus_project_url').with(rest());
+
+const result = await client.request(readFieldsByCollection(collection_name));
+```
+
+</template>
+</SnippetToggler>
+
+#### Query Parameters
+
+This endpoint doesn't currently support any query parameters.
+
+### Response
+
+An array of [field objects](#the-field-object).
+
+### Example
+
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
+
+`GET /fields/articles`
+
+</template>
+<template #graphql>
+
+`POST /graphql/system`
 
 ```graphql
 query {
@@ -242,37 +312,35 @@ query {
 }
 ```
 
----
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, readFieldsByCollection } from '@directus/sdk';
+
+const client = createDirectus('https://directus.example.com').with(rest());
+
+const result = await client.request(readFieldsByCollection('articles'));
+```
+
+</template>
+</SnippetToggler>
 
 ## Retrieve a Field
 
 Get a single field in a given collection.
 
-### Query Parameters
+### Request
 
-This endpoint doesn't currently support any query parameters.
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
 
-### Returns
+`GET /fields/:collection/:field`
 
-A [field object](#the-field-object).
+</template>
+<template #graphql>
 
-### REST API
-
-```
-GET /fields/:collection/:field
-```
-
-##### Example
-
-```
-GET /fields/articles/title
-```
-
-### GraphQL
-
-```
-POST /graphql/system
-```
+`POST /graphql/system`
 
 ```graphql
 type Query {
@@ -280,7 +348,39 @@ type Query {
 }
 ```
 
-##### Example
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, readField } from '@directus/sdk';
+
+const client = createDirectus('directus_project_url').with(rest());
+
+const result = await client.request(readField(collection_name, field_name));
+```
+
+</template>
+</SnippetToggler>
+
+#### Query Parameters
+
+This endpoint doesn't currently support any query parameters.
+
+### Response
+
+A [field object](#the-field-object).
+
+### Example
+
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
+
+`GET /fields/articles/title`
+
+</template>
+<template #graphql>
+
+`POST /graphql/system`
 
 ```graphql
 query {
@@ -291,17 +391,70 @@ query {
 }
 ```
 
----
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, readField } from '@directus/sdk';
+
+const client = createDirectus('https://directus.example.com').with(rest());
+
+const result = await client.request(readField('articles', 'title'));
+```
+
+</template>
+</SnippetToggler>
 
 ## Create a Field
 
 Create a new field in the given collection.
 
-### Query Parameters
+### Request
+
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
+
+`POST /fields/:collection`
+
+Provide a [collection object](#the-collection-object) as the body of your request with `field` and `type` being required
+parameters.
+
+</template>
+<template #graphql>
+
+`POST /graphql/system`
+
+```graphql
+type Mutation {
+	create_fields_item(collection: String!, data: create_directus_fields_input!): directus_fields
+}
+```
+
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, createField } from '@directus/sdk';
+
+const client = createDirectus('directus_project_url').with(rest());
+
+const result = await client.request(
+	createField(collection_name, {
+		field: field_name,
+		type: field_type,
+		field_field: value,
+	})
+);
+```
+
+</template>
+</SnippetToggler>
+
+#### Query Parameters
 
 This endpoint doesn't currently support any query parameters.
 
-### Request Body
+#### Request Body
 
 `field` **Required**\
 Field key, also used as the column name.
@@ -316,21 +469,18 @@ Any of the optional meta values in the [field object](#the-field-object).
 `schema`\
 Any of the optional schema values in the [field object](#the-field-object).
 
-### Returns
+### Response
 
 The [field object](#the-field-object) for the created field.
 
-### REST API
+### Example
 
-```
-POST /fields/:collection
-```
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
 
-##### Example
+`POST /fields/articles`
 
 ```json
-// POST /fields/articles
-
 {
 	"field": "title",
 	"type": "string",
@@ -343,19 +493,10 @@ POST /fields/:collection
 }
 ```
 
-### GraphQL
+</template>
+<template #graphql>
 
-```
-POST /graphql/system
-```
-
-```graphql
-type Mutation {
-	create_fields_item(collection: String!, data: create_directus_fields_input!): directus_fields
-}
-```
-
-##### Example
+`POST /graphql/system`
 
 ```graphql
 mutation {
@@ -369,17 +510,70 @@ mutation {
 }
 ```
 
----
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, createField } from '@directus/sdk';
+
+const client = createDirectus('https://directus.example.com').with(rest());
+
+const result = await client.request(
+	createField('articles', {
+		field: 'subject tags',
+		type: 'csv',
+		meta: {
+			interface: 'tags',
+			note: 'subject tags for an article',
+		},
+	})
+);
+```
+
+</template>
+</SnippetToggler>
 
 ## Update a Field
 
 Updates the given field in the given collection.
 
-### Query Parameters
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
+
+`PATCH /fields/articles/title`
+
+Provide a partial [field object](#the-field-object) as the body of your request.
+
+</template>
+<template #graphql>
+
+`POST /graphql/system`
+
+```graphql
+type Mutation {
+	update_fields_item(collection: String!, field: String!, data: update_directus_fields_input!): directus_fields
+}
+```
+
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, updateField } from '@directus/sdk';
+
+const client = createDirectus('directus_project_url').with(rest());
+
+const result = await client.request(updateField(collection_name, field_name, partial_field_object));
+```
+
+</template>
+</SnippetToggler>
+
+#### Query Parameters
 
 This endpoint doesn't currently support any query parameters.
 
-### Request Body
+#### Request Body
 
 `type`\
 The new type for the field.
@@ -399,21 +593,18 @@ Any of the optional schema values in the [field object](#the-field-object).
 
 Updating the field name is not supported at this time.
 
-### Returns
+### Response
 
 The [field object](#the-field-object) for the updated field.
 
-### REST API
+### Example
 
-```
-PATCH /fields/:collection/:field
-```
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
 
-##### Example
+`PATCH /fields/articles/title`
 
 ```json
-// PATCH /fields/articles/title
-
 {
 	"meta": {
 		"note": "Put the title here"
@@ -424,19 +615,10 @@ PATCH /fields/:collection/:field
 }
 ```
 
-### GraphQL
+</template>
+<template #graphql>
 
-```
-POST /graphql/system
-```
-
-```graphql
-type Mutation {
-	update_fields_item(collection: String!, field: String!, data: update_directus_fields_input!): directus_fields
-}
-```
-
-##### Example
+`POST /graphql/system`
 
 ```graphql
 mutation {
@@ -451,7 +633,25 @@ mutation {
 }
 ```
 
----
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, updateField } from '@directus/sdk';
+
+const client = createDirectus('https://directus.example.com').with(rest());
+
+const result = await client.request(
+	updateField('articles', 'subject tags', {
+		meta: {
+			note: 'tags for the article based on subjects addressed',
+		},
+	})
+);
+```
+
+</template>
+</SnippetToggler>
 
 ## Delete a Field
 
@@ -463,23 +663,17 @@ Be aware, this will delete the column from the database, including all data in i
 
 :::
 
-### REST API
+### Request
 
-```
-DELETE /fields/:collection/:field
-```
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
 
-##### Example
+`DELETE /fields/:collection/:field`
 
-```
-DELETE /fields/articles/title
-```
+</template>
+<template #graphql>
 
-### GraphQL
-
-```
-POST /graphql/system
-```
+`POST /graphql/system`
 
 ```graphql
 type Mutation {
@@ -487,7 +681,31 @@ type Mutation {
 }
 ```
 
-##### Example
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, deleteField } from '@directus/sdk';
+
+const client = createDirectus('directus_project_url').with(rest());
+
+const result = await client.request(deleteField(collection_name, field_name));
+```
+
+</template>
+</SnippetToggler>
+
+### Example
+
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
+
+`DELETE /fields/articles/title`
+
+</template>
+<template #graphql>
+
+`POST /graphql/system`
 
 ```graphql
 mutation {
@@ -497,3 +715,17 @@ mutation {
 	}
 }
 ```
+
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, deleteField } from '@directus/sdk';
+
+const client = createDirectus('https://directus.example.com').with(rest());
+
+const result = await client.request(deleteField('articles', 'featured_quote'));
+```
+
+</template>
+</SnippetToggler>

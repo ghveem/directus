@@ -1,20 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 
-interface CardProps {
-	title: string;
-	h?: '1' | '2' | '3' | '4' | '5';
-	text: string;
-	icon?: string;
-	url?: string;
-	addMargin?: boolean;
-}
-
-const props = withDefaults(defineProps<CardProps>(), {
-	h: '2',
-	icon: 'link',
-	addMargin: true,
-});
+const props = withDefaults(
+	defineProps<{
+		title: string;
+		h?: '1' | '2' | '3' | '4' | '5';
+		text: string;
+		icon?: string;
+		url?: string;
+		addMargin?: boolean;
+	}>(),
+	{
+		h: '2',
+		icon: 'link',
+	},
+);
 
 const tagType = computed(() => (props.url ? 'a' : 'div'));
 const headerType = computed(() => 'h' + props.h);
@@ -25,7 +25,7 @@ const iconIsImage = computed(() => props.icon.startsWith('/'));
 	<component :is="tagType" :href="url" class="card" :class="{ margin: addMargin }">
 		<div v-if="icon" class="icon">
 			<img v-if="iconIsImage" :src="icon" alt="" />
-			<span mi v-else>{{ icon }}</span>
+			<span v-else mi translate="no">{{ icon }}</span>
 		</div>
 
 		<div class="text">
@@ -42,7 +42,6 @@ const iconIsImage = computed(() => props.icon.startsWith('/'));
 	border-radius: 8px;
 	padding: 24px;
 	width: 100%;
-	height: 100%;
 	transition: border-color 0.25s;
 	gap: 20px;
 }
@@ -73,7 +72,9 @@ const iconIsImage = computed(() => props.icon.startsWith('/'));
 
 .icon span[mi] {
 	font-size: 24px;
-	font-variation-settings: 'opsz' 24, 'wght' 500;
+	font-variation-settings:
+		'opsz' 24,
+		'wght' 500;
 	color: var(--vp-c-purple);
 }
 

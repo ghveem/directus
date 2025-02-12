@@ -1,5 +1,5 @@
 import Joi from 'joi';
-import { InvalidPayloadException } from '../exceptions/invalid-payload.js';
+import { InvalidPayloadError } from '@directus/errors';
 import type { SnapshotDiffWithHash, SnapshotWithHash } from '../types/snapshot.js';
 import { DiffKind } from '../types/snapshot.js';
 
@@ -26,7 +26,7 @@ const applyJoiSchema = Joi.object({
 				Joi.object({
 					collection: Joi.string().required(),
 					diff: Joi.array().items(deepDiffSchema).required(),
-				})
+				}),
 			)
 			.required(),
 		fields: Joi.array()
@@ -35,7 +35,7 @@ const applyJoiSchema = Joi.object({
 					collection: Joi.string().required(),
 					field: Joi.string().required(),
 					diff: Joi.array().items(deepDiffSchema).required(),
-				})
+				}),
 			)
 			.required(),
 		relations: Joi.array()
@@ -45,7 +45,7 @@ const applyJoiSchema = Joi.object({
 					field: Joi.string().required(),
 					related_collection: Joi.string().allow(null),
 					diff: Joi.array().items(deepDiffSchema).required(),
-				})
+				}),
 			)
 			.required(),
 	}).required(),
@@ -58,7 +58,7 @@ const applyJoiSchema = Joi.object({
  */
 export function validateApplyDiff(applyDiff: SnapshotDiffWithHash, currentSnapshotWithHash: SnapshotWithHash) {
 	const { error } = applyJoiSchema.validate(applyDiff);
-	if (error) throw new InvalidPayloadException(error.message);
+	if (error) throw new InvalidPayloadError({ reason: error.message });
 
 	// No changes to apply
 	if (
@@ -77,23 +77,23 @@ export function validateApplyDiff(applyDiff: SnapshotDiffWithHash, currentSnapsh
 
 		if (diffCollection.diff[0]?.kind === DiffKind.NEW) {
 			const existingCollection = currentSnapshotWithHash.collections.find(
-				(c) => c.collection === diffCollection.collection
+				(c) => c.collection === diffCollection.collection,
 			);
 
 			if (existingCollection) {
-				throw new InvalidPayloadException(
-					`Provided diff is trying to create collection "${collection}" but it already exists. Please generate a new diff and try again.`
-				);
+				throw new InvalidPayloadError({
+					reason: `Provided diff is trying to create collection "${collection}" but it already exists. Please generate a new diff and try again`,
+				});
 			}
 		} else if (diffCollection.diff[0]?.kind === DiffKind.DELETE) {
 			const existingCollection = currentSnapshotWithHash.collections.find(
-				(c) => c.collection === diffCollection.collection
+				(c) => c.collection === diffCollection.collection,
 			);
 
 			if (!existingCollection) {
-				throw new InvalidPayloadException(
-					`Provided diff is trying to delete collection "${collection}" but it does not exist. Please generate a new diff and try again.`
-				);
+				throw new InvalidPayloadError({
+					reason: `Provided diff is trying to delete collection "${collection}" but it does not exist. Please generate a new diff and try again`,
+				});
 			}
 		}
 	}
@@ -103,23 +103,23 @@ export function validateApplyDiff(applyDiff: SnapshotDiffWithHash, currentSnapsh
 
 		if (diffField.diff[0]?.kind === DiffKind.NEW) {
 			const existingField = currentSnapshotWithHash.fields.find(
-				(f) => f.collection === diffField.collection && f.field === diffField.field
+				(f) => f.collection === diffField.collection && f.field === diffField.field,
 			);
 
 			if (existingField) {
-				throw new InvalidPayloadException(
-					`Provided diff is trying to create field "${field}" but it already exists. Please generate a new diff and try again.`
-				);
+				throw new InvalidPayloadError({
+					reason: `Provided diff is trying to create field "${field}" but it already exists. Please generate a new diff and try again`,
+				});
 			}
 		} else if (diffField.diff[0]?.kind === DiffKind.DELETE) {
 			const existingField = currentSnapshotWithHash.fields.find(
-				(f) => f.collection === diffField.collection && f.field === diffField.field
+				(f) => f.collection === diffField.collection && f.field === diffField.field,
 			);
 
 			if (!existingField) {
-				throw new InvalidPayloadException(
-					`Provided diff is trying to delete field "${field}" but it does not exist. Please generate a new diff and try again.`
-				);
+				throw new InvalidPayloadError({
+					reason: `Provided diff is trying to delete field "${field}" but it does not exist. Please generate a new diff and try again`,
+				});
 			}
 		}
 	}
@@ -130,28 +130,28 @@ export function validateApplyDiff(applyDiff: SnapshotDiffWithHash, currentSnapsh
 
 		if (diffRelation.diff[0]?.kind === DiffKind.NEW) {
 			const existingRelation = currentSnapshotWithHash.relations.find(
-				(r) => r.collection === diffRelation.collection && r.field === diffRelation.field
+				(r) => r.collection === diffRelation.collection && r.field === diffRelation.field,
 			);
 
 			if (existingRelation) {
-				throw new InvalidPayloadException(
-					`Provided diff is trying to create relation "${relation}" but it already exists. Please generate a new diff and try again.`
-				);
+				throw new InvalidPayloadError({
+					reason: `Provided diff is trying to create relation "${relation}" but it already exists. Please generate a new diff and try again`,
+				});
 			}
 		} else if (diffRelation.diff[0]?.kind === DiffKind.DELETE) {
 			const existingRelation = currentSnapshotWithHash.relations.find(
-				(r) => r.collection === diffRelation.collection && r.field === diffRelation.field
+				(r) => r.collection === diffRelation.collection && r.field === diffRelation.field,
 			);
 
 			if (!existingRelation) {
-				throw new InvalidPayloadException(
-					`Provided diff is trying to delete relation "${relation}" but it does not exist. Please generate a new diff and try again.`
-				);
+				throw new InvalidPayloadError({
+					reason: `Provided diff is trying to delete relation "${relation}" but it does not exist. Please generate a new diff and try again`,
+				});
 			}
 		}
 	}
 
-	throw new InvalidPayloadException(
-		`Provided hash does not match the current instance's schema hash, indicating the schema has changed after this diff was generated. Please generate a new diff and try again.`
-	);
+	throw new InvalidPayloadError({
+		reason: `Provided hash does not match the current instance's schema hash, indicating the schema has changed after this diff was generated. Please generate a new diff and try again`,
+	});
 }

@@ -1,5 +1,5 @@
+import { useBus } from '../../bus/index.js';
 import emitter from '../../emitter.js';
-import { getMessenger } from '../../messenger.js';
 import type { WebSocketEvent } from '../messages.js';
 
 let actionsRegistered = false;
@@ -10,21 +10,32 @@ export function registerWebSocketEvents() {
 
 	registerActionHooks([
 		'items',
+		'access',
 		'activity',
 		'collections',
+		'dashboards',
+		'flows',
 		'folders',
+		'notifications',
+		'operations',
+		'panels',
 		'permissions',
+		'policies',
 		'presets',
 		'revisions',
 		'roles',
 		'settings',
+		'shares',
+		'translations',
 		'users',
+		'versions',
 		'webhooks',
 	]);
 
 	registerFieldsHooks();
 	registerFilesHooks();
 	registerRelationsHooks();
+	registerSortHooks();
 }
 
 function registerActionHooks(modules: string[]) {
@@ -125,15 +136,24 @@ function registerRelationsHooks() {
 	}));
 }
 
+function registerSortHooks() {
+	registerAction('items.sort', ({ collection, item }) => ({
+		collection,
+		action: 'update',
+		keys: [item],
+		payload: {},
+	}));
+}
+
 /**
  * Wrapper for emitter.onAction to hook into system events
  * @param event The action event to watch
  * @param transform Transformer function
  */
 function registerAction(event: string, transform: (args: Record<string, any>) => WebSocketEvent) {
-	const messenger = getMessenger();
+	const messenger = useBus();
 
-	emitter.onAction(event, async (data: Record<string, any>) => {
+	emitter.onAction(event, (data: Record<string, any>) => {
 		// push the event through the Redis pub/sub
 		messenger.publish('websocket.event', transform(data) as Record<string, any>);
 	});

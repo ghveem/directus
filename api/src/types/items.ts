@@ -1,25 +1,7 @@
-/**
- * I know this looks a little silly, but it allows us to explicitly differentiate between when we're
- * expecting an item vs any other generic object.
- */
-
-import type { BaseException } from '@directus/exceptions';
-import type { EventContext } from '@directus/types';
+import type { DirectusError } from '@directus/errors';
+import type { EventContext, PrimaryKey } from '@directus/types';
 import type { MutationTracker } from '../services/items.js';
-
-export type Item = Record<string, any>;
-
-export type PrimaryKey = string | number;
-
-export type Alterations = {
-	create: {
-		[key: string]: any;
-	}[];
-	update: {
-		[key: string]: any;
-	}[];
-	delete: (number | string)[];
-};
+import type { UserIntegrityCheckFlag } from '../utils/validate-user-count-integrity.js';
 
 export type MutationOptions = {
 	/**
@@ -61,7 +43,21 @@ export type MutationOptions = {
 	/*
 	 * The validation error to throw right before the mutation takes place
 	 */
-	preMutationException?: BaseException | undefined;
+	preMutationError?: DirectusError | undefined;
+
+	bypassAutoIncrementSequenceReset?: boolean;
+
+	/**
+	 * Indicate that the top level mutation needs to perform a user integrity check before commiting the transaction
+	 * This is a combination of flags
+	 * @see UserIntegrityCheckFlag
+	 */
+	userIntegrityCheckFlags?: UserIntegrityCheckFlag;
+
+	/**
+	 * Callback function that is called whenever a mutation requires a user integrity check to be made
+	 */
+	onRequireUserIntegrityCheck?: ((flags: UserIntegrityCheckFlag) => void) | undefined;
 };
 
 export type ActionEventParams = {

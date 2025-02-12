@@ -1,3 +1,49 @@
+<script setup lang="ts">
+import { useCollectionsStore } from '@/stores/collections';
+import { isSystemCollection } from '@directus/system-data';
+import { computed } from 'vue';
+import { useI18n } from 'vue-i18n';
+
+const props = withDefaults(
+	defineProps<{
+		value: string[] | null;
+		disabled?: boolean;
+		includeSystem?: boolean;
+		includeSingleton?: boolean;
+	}>(),
+	{ includeSingleton: true },
+);
+
+defineEmits<{
+	(e: 'input', value: string[] | null): void;
+}>();
+
+const { t } = useI18n();
+
+const collectionsStore = useCollectionsStore();
+
+const collections = computed(() => {
+	let collections = collectionsStore.sortedCollections.filter((collection) => collection.type === 'table');
+
+	if (!props.includeSingleton) {
+		collections = collections.filter((collection) => collection?.meta?.singleton === false);
+	}
+
+	if (!props.includeSystem) {
+		collections = collections.filter((collection) => isSystemCollection(collection.collection) === false);
+	}
+
+	return collections;
+});
+
+const items = computed(() => {
+	return collections.value.map((collection) => ({
+		text: collection.name,
+		value: collection.collection,
+	}));
+});
+</script>
+
 <template>
 	<v-notice v-if="items.length === 0">
 		{{ t('no_collections') }}
@@ -10,46 +56,3 @@
 		@input="$emit('input', $event)"
 	/>
 </template>
-
-<script setup lang="ts">
-import { useCollectionsStore } from '@/stores/collections';
-import { computed } from 'vue';
-import { useI18n } from 'vue-i18n';
-
-const props = withDefaults(
-	defineProps<{
-		value: string[] | null;
-		disabled?: boolean;
-		includeSystem?: boolean;
-		includeSingleton?: boolean;
-	}>(),
-	{ includeSingleton: true }
-);
-
-defineEmits<{
-	(e: 'input', value: string[] | null): void;
-}>();
-
-const { t } = useI18n();
-
-const collectionsStore = useCollectionsStore();
-
-const collections = computed(() => {
-	let collections = collectionsStore.collections;
-
-	if (!props.includeSingleton) {
-		collections = collections.filter((collection) => collection?.meta?.singleton === false);
-	}
-
-	if (props.includeSystem) return collections;
-
-	return collections.filter((collection) => collection.collection.startsWith('directus_') === false);
-});
-
-const items = computed(() => {
-	return collections.value.map((collection) => ({
-		text: collection.name,
-		value: collection.collection,
-	}));
-});
-</script>

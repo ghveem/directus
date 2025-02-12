@@ -1,9 +1,60 @@
+<script setup lang="ts">
+import { useI18n } from 'vue-i18n';
+import { computed } from 'vue';
+import { ValidationError, Field } from '@directus/types';
+import { formatFieldFunction } from '@/utils/format-field-function';
+import { extractFieldFromFunction } from '@/utils/extract-field-from-function';
+
+const props = defineProps<{
+	validationErrors: ValidationError[];
+	fields: Field[];
+}>();
+
+defineEmits(['scroll-to-field']);
+
+const { t } = useI18n();
+
+const validationErrorsWithNames = computed<
+	(ValidationError & { fieldName: string; groupName: string; customValidationMessage: string | null })[]
+>(() => {
+	return props.validationErrors.map(
+		(validationError: ValidationError & { nestedNames?: Record<string, string>; validation_message?: string }) => {
+			const { field: _fieldKey, fn: functionName } = extractFieldFromFunction(validationError.field);
+			const [fieldKey, ...nestedFieldKeys] = _fieldKey.split('.');
+			const field = props.fields.find((field) => field.field === fieldKey);
+			const group = props.fields.find((field) => field.field === validationError.group);
+			const fieldName = getFieldName() + getNestedFieldNames(nestedFieldKeys, validationError.nestedNames);
+
+			return {
+				...validationError,
+				field: fieldKey,
+				fieldName,
+				groupName: group?.name ?? validationError.group,
+				customValidationMessage: validationError.validation_message ?? field?.meta?.validation_message,
+			};
+
+			function getFieldName() {
+				if (!field) return validationError.field;
+				if (functionName) return formatFieldFunction(field.collection, validationError.field);
+				return field.name;
+			}
+
+			function getNestedFieldNames(nestedFieldKeys: string[], nestedNames?: Record<string, string>) {
+				if (!nestedFieldKeys?.length) return '';
+				const separator = ' → ';
+				return `${separator}${nestedFieldKeys.map((name) => nestedNames?.[name] ?? name).join(separator)}`;
+			}
+		},
+	) as (ValidationError & { fieldName: string; groupName: string; customValidationMessage: string | null })[];
+});
+</script>
+
 <template>
 	<v-notice type="danger" class="full selectable">
 		<div>
 			<p>{{ t('validation_errors_notice') }}</p>
 			<ul class="validation-errors-list">
-				<li v-for="(validationError, index) of validationErrorsWithNames" :key="index">
+				<li v-for="(validationError, index) of validationErrorsWithNames" :key="index" class="validation-error">
 					<strong class="field" @click="$emit('scroll-to-field', validationError.group || validationError.field)">
 						<template v-if="validationError.field && validationError.hidden && validationError.group">
 							{{
@@ -17,7 +68,7 @@
 						</template>
 						<template v-else-if="validationError.field">{{ validationError.fieldName }}</template>
 					</strong>
-					<span>:&nbsp;</span>
+					<strong>{{ ': ' }}</strong>
 					<template v-if="validationError.customValidationMessage">
 						{{ validationError.customValidationMessage }}
 						<v-icon
@@ -27,6 +78,7 @@
 									: t(`validationError.${validationError.type}`, validationError)
 							"
 							small
+							right
 							name="help"
 						/>
 					</template>
@@ -44,48 +96,6 @@
 	</v-notice>
 </template>
 
-<script setup lang="ts">
-import { useI18n } from 'vue-i18n';
-import { computed } from 'vue';
-import { ValidationError, Field } from '@directus/types';
-import { formatFieldFunction } from '@/utils/format-field-function';
-import { extractFieldFromFunction } from '@/utils/extract-field-from-function';
-
-interface Props {
-	validationErrors: ValidationError[];
-	fields: Field[];
-}
-
-const props = defineProps<Props>();
-defineEmits(['scroll-to-field']);
-
-const { t } = useI18n();
-
-const validationErrorsWithNames = computed<
-	(ValidationError & { fieldName: string; groupName: string; customValidationMessage: string | null })[]
->(() => {
-	return props.validationErrors.map((validationError) => {
-		const { field: fieldKey, fn: functionName } = extractFieldFromFunction(validationError.field);
-
-		const field = props.fields.find((field) => field.field === fieldKey);
-		const group = props.fields.find((field) => field.field === validationError.group);
-
-		let fieldName = field?.name ?? validationError.field;
-
-		if (functionName && field?.collection) {
-			fieldName = formatFieldFunction(field.collection, validationError.field);
-		}
-
-		return {
-			...validationError,
-			fieldName,
-			groupName: group?.name ?? validationError.group,
-			customValidationMessage: field?.meta?.validation_message,
-		};
-	}) as (ValidationError & { fieldName: string; groupName: string; customValidationMessage: string | null })[];
-});
-</script>
-
 <style lang="scss" scoped>
 .validation-errors-list {
 	margin-top: 4px;
@@ -97,6 +107,11 @@ const validationErrorsWithNames = computed<
 		&:hover {
 			text-decoration: underline;
 		}
+	}
+
+	.validation-error .v-icon {
+		vertical-align: text-top;
+		margin-left: 0 !important;
 	}
 
 	li:not(:last-child) {

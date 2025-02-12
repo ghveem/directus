@@ -1,11 +1,11 @@
+import { ErrorCode, ForbiddenError, isDirectusError } from '@directus/errors';
+import type { PrimaryKey } from '@directus/types';
 import express from 'express';
-import { ForbiddenException } from '../exceptions/index.js';
 import { respond } from '../middleware/respond.js';
 import useCollection from '../middleware/use-collection.js';
 import { validateBatch } from '../middleware/validate-batch.js';
 import { MetaService } from '../services/meta.js';
 import { RolesService } from '../services/roles.js';
-import type { PrimaryKey } from '../types/index.js';
 import asyncHandler from '../utils/async-handler.js';
 import { sanitizeQuery } from '../utils/sanitize-query.js';
 
@@ -40,7 +40,7 @@ router.post(
 				res.locals['payload'] = { data: item };
 			}
 		} catch (error: any) {
-			if (error instanceof ForbiddenException) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
 				return next();
 			}
 
@@ -49,7 +49,7 @@ router.post(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 const readHandler = asyncHandler(async (req, res, next) => {
@@ -74,6 +74,36 @@ router.get('/', validateBatch('read'), readHandler, respond);
 router.search('/', validateBatch('read'), readHandler, respond);
 
 router.get(
+	'/me',
+	asyncHandler(async (req, res, next) => {
+		if (!req.accountability?.user && !req.accountability?.role) throw new ForbiddenError();
+
+		const service = new RolesService({
+			accountability: req.accountability,
+			schema: req.schema,
+		});
+
+		const query = { ...req.sanitizedQuery, limit: -1 };
+
+		try {
+			const roles = await service.readMany(req.accountability.roles, query);
+
+			res.locals['payload'] = { data: roles || null };
+		} catch (error: any) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
+				res.locals['payload'] = { data: req.accountability.roles.map((id) => ({ id })) };
+				return next();
+			}
+
+			throw error;
+		}
+
+		return next();
+	}),
+	respond,
+);
+
+router.get(
 	'/:pk',
 	asyncHandler(async (req, res, next) => {
 		const service = new RolesService({
@@ -86,7 +116,7 @@ router.get(
 		res.locals['payload'] = { data: record || null };
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.patch(
@@ -113,7 +143,7 @@ router.patch(
 			const result = await service.readMany(keys, req.sanitizedQuery);
 			res.locals['payload'] = { data: result };
 		} catch (error: any) {
-			if (error instanceof ForbiddenException) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
 				return next();
 			}
 
@@ -122,7 +152,7 @@ router.patch(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.patch(
@@ -139,7 +169,7 @@ router.patch(
 			const item = await service.readOne(primaryKey, req.sanitizedQuery);
 			res.locals['payload'] = { data: item || null };
 		} catch (error: any) {
-			if (error instanceof ForbiddenException) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
 				return next();
 			}
 
@@ -148,7 +178,7 @@ router.patch(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.delete(
@@ -171,7 +201,7 @@ router.delete(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.delete(
@@ -186,7 +216,7 @@ router.delete(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 export default router;

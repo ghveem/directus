@@ -1,4 +1,7 @@
+import { useEnv } from '@directus/env';
+import { ErrorCode, InvalidPayloadError, isDirectusError } from '@directus/errors';
 import formatTitle from '@directus/format-title';
+import type { BusboyFileStream, PrimaryKey } from '@directus/types';
 import { toArray } from '@directus/utils';
 import Busboy from 'busboy';
 import bytes from 'bytes';
@@ -7,19 +10,16 @@ import express from 'express';
 import Joi from 'joi';
 import { minimatch } from 'minimatch';
 import path from 'path';
-import env from '../env.js';
-import { ContentTooLargeException } from '../exceptions/content-too-large.js';
-import { ForbiddenException, InvalidPayloadException } from '../exceptions/index.js';
 import { respond } from '../middleware/respond.js';
 import useCollection from '../middleware/use-collection.js';
 import { validateBatch } from '../middleware/validate-batch.js';
 import { FilesService } from '../services/files.js';
 import { MetaService } from '../services/meta.js';
-import type { PrimaryKey } from '../types/index.js';
 import asyncHandler from '../utils/async-handler.js';
 import { sanitizeQuery } from '../utils/sanitize-query.js';
 
 const router = express.Router();
+const env = useEnv();
 
 router.use(useCollection('directus_files'));
 
@@ -41,7 +41,7 @@ export const multipartHandler: RequestHandler = (req, res, next) => {
 		headers,
 		defParamCharset: 'utf8',
 		limits: {
-			fileSize: env['FILES_MAX_UPLOAD_SIZE'] ? bytes(env['FILES_MAX_UPLOAD_SIZE'] as string) : undefined,
+			fileSize: bytes.parse(env['FILES_MAX_UPLOAD_SIZE'] as string) ?? undefined,
 		},
 	});
 
@@ -56,7 +56,7 @@ export const multipartHandler: RequestHandler = (req, res, next) => {
 	 * the row in directus_files async during the upload of the actual file.
 	 */
 
-	let disk: string = toArray(env['STORAGE_LOCATIONS'])[0];
+	let disk: string = toArray(env['STORAGE_LOCATIONS'] as string)[0]!;
 	let payload: any = {};
 	let fileCount = 0;
 
@@ -74,16 +74,16 @@ export const multipartHandler: RequestHandler = (req, res, next) => {
 		payload[fieldname] = fieldValue;
 	});
 
-	busboy.on('file', async (_fieldname, fileStream, { filename, mimeType }) => {
+	busboy.on('file', async (_fieldname, fileStream: BusboyFileStream, { filename, mimeType }) => {
 		if (!filename) {
-			return busboy.emit('error', new InvalidPayloadException(`File is missing filename`));
+			return busboy.emit('error', new InvalidPayloadError({ reason: `File is missing filename` }));
 		}
 
 		const allowedPatterns = toArray(env['FILES_MIME_TYPE_ALLOW_LIST'] as string | string[]);
 		const mimeTypeAllowed = allowedPatterns.some((pattern) => minimatch(mimeType, pattern));
 
 		if (mimeTypeAllowed === false) {
-			return busboy.emit('error', new InvalidPayloadException(`File is of invalid content type`));
+			return busboy.emit('error', new InvalidPayloadError({ reason: `File is of invalid content type` }));
 		}
 
 		fileCount++;
@@ -92,9 +92,9 @@ export const multipartHandler: RequestHandler = (req, res, next) => {
 			if (!payload.title) {
 				payload.title = formatTitle(path.parse(filename).name);
 			}
-
-			payload.filename_download = filename;
 		}
+
+		payload.filename_download = filename;
 
 		const payloadWithRequiredFields = {
 			...payload,
@@ -104,11 +104,6 @@ export const multipartHandler: RequestHandler = (req, res, next) => {
 
 		// Clear the payload for the next to-be-uploaded file
 		payload = {};
-
-		fileStream.on('limit', () => {
-			const error = new ContentTooLargeException(`Uploaded file is too large`);
-			next(error);
-		});
 
 		try {
 			const primaryKey = await service.uploadOne(fileStream, payloadWithRequiredFields, existingPrimaryKey);
@@ -134,7 +129,7 @@ export const multipartHandler: RequestHandler = (req, res, next) => {
 	function tryDone() {
 		if (savedFiles.length === fileCount) {
 			if (fileCount === 0) {
-				return next(new InvalidPayloadException(`No files were included in the body`));
+				return next(new InvalidPayloadError({ reason: `No files were included in the body` }));
 			}
 
 			res.locals['savedFiles'] = savedFiles;
@@ -176,7 +171,7 @@ router.post(
 				};
 			}
 		} catch (error: any) {
-			if (error instanceof ForbiddenException) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
 				return next();
 			}
 
@@ -185,7 +180,7 @@ router.post(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 const importSchema = Joi.object({
@@ -199,7 +194,7 @@ router.post(
 		const { error } = importSchema.validate(req.body);
 
 		if (error) {
-			throw new InvalidPayloadException(error.message);
+			throw new InvalidPayloadError({ reason: error.message });
 		}
 
 		const service = new FilesService({
@@ -213,7 +208,7 @@ router.post(
 			const record = await service.readOne(primaryKey, req.sanitizedQuery);
 			res.locals['payload'] = { data: record || null };
 		} catch (error: any) {
-			if (error instanceof ForbiddenException) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
 				return next();
 			}
 
@@ -222,7 +217,7 @@ router.post(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 const readHandler = asyncHandler(async (req, res, next) => {
@@ -267,7 +262,7 @@ router.get(
 		res.locals['payload'] = { data: record || null };
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.patch(
@@ -294,7 +289,7 @@ router.patch(
 			const result = await service.readMany(keys, req.sanitizedQuery);
 			res.locals['payload'] = { data: result || null };
 		} catch (error: any) {
-			if (error instanceof ForbiddenException) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
 				return next();
 			}
 
@@ -303,7 +298,7 @@ router.patch(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.patch(
@@ -321,7 +316,7 @@ router.patch(
 			const record = await service.readOne(req.params['pk']!, req.sanitizedQuery);
 			res.locals['payload'] = { data: record || null };
 		} catch (error: any) {
-			if (error instanceof ForbiddenException) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
 				return next();
 			}
 
@@ -330,7 +325,7 @@ router.patch(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.delete(
@@ -353,7 +348,7 @@ router.delete(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.delete(
@@ -368,7 +363,7 @@ router.delete(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 export default router;

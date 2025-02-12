@@ -1,21 +1,12 @@
 ---
 description: This guide shows how to setup content translations for internationalization (i18n).
-tags: []
-skill_level:
 directus_version: 10.2.0
-author_override:
 author: Bryant Gillespie
 ---
 
 # Creating Content Translations
 
-> {{ $frontmatter.description }}
-
-:::tip Author: {{$frontmatter.author}}
-
-**Directus Version:** {{$frontmatter.directus_version}}
-
-:::
+<GuideMeta />
 
 Here's what the end result will look like for users when using the Data Studio to manage content.
 
@@ -46,12 +37,12 @@ Create a new collection for all the different languages your application will su
    languages
 
    - code (Primary Key Field, Type: Manually entered string )
-   - name (Type: String, Inferface: Input)
+   - name (Type: String, Interface: Input)
    - direction (Type: String, Interface: Dropdown, Default Value: ltr)
    ```
 
    a. When creating the collection, set the primary key to `code` and use the `Manually entered string` type. There's no
-   need to add Optional System Fields.
+   need to add Optional Fields.
 
    ![The Creating New Collection form overlay is shown. The active tab is Collection Setup. Name, Singleton, Primary Key Field, and Type fields are shown and editable by the user.](https://marketing.directus.app/assets/e4fe9a63-9cfd-48d9-a1a9-7aedff6279a9.png?key=doc)
 
@@ -102,7 +93,7 @@ Before you can create translations, you need a collection of content to translat
    - For Language Direction Field, choose the `direction` field.
    - You can also select a Default Language by entering the primary key or `code` for that language.
 
-:::tip
+::: tip
 
 By default Directus will name this junction collection `articles_translations` following the convention
 `{collection_name}_translations`. If you want more control over the naming of your translation collection and the fields
@@ -123,7 +114,7 @@ within, you can choose to Continue in Advanced Field Creation Mode.
    - title (Type: String, Interface: Input )
    - slug (Type: String, Interface: Input)
    - summary (Type: Text, Inteface: Textarea)
-   - content (Type: Text, Inferface: WYSIWYG)
+   - content (Type: Text, Interface: WYSIWYG)
    ```
 
    ![Data Model settings screen for the Articles Translations collection is displayed. The following fields are shown: id, articles_id, languages_code, title, slug, summary, content.](https://marketing.directus.app/assets/e2ee5c61-3449-40cf-9cd4-24f9edb2ae6a.png?key=doc)
@@ -160,7 +151,7 @@ Instead, you'll want to add a few parameters to your API call.
 - Limit parameter to only return the a single result.
 - Deep parameter to filter the related collection to only show the translations in the current language.
 
-:::tip
+::: tip
 
 Study the [Global Query Parameters > Fields > Deep](/reference/query#deep) parameter to learn how to filter nested
 relational data . It's incredible powerful.
@@ -169,38 +160,42 @@ relational data . It's incredible powerful.
 
 **Sample Request**
 
-```javascript
+```js
+import { createDirectus, rest, readItems } from '@directus/sdk';
+
+// Initialize the SDK.
+const directus = createDirectus('https://directus.example.com').with(rest());
+
 // Write some code here in your front-end framework that gets the slug from the current URL.
 const slug = 'slug-in-english';
 const languageCode = 'en-US';
 
 // Call the Directus API using the SDK using the locale of the frontend and the slug.
-const response = await directus.items('articles').readByQuery({
-	deep: {
-		translations: {
-			_filter: {
-				_and: [
-					{
-						languages_code: {
-							_eq: languageCode,
+const pages = await directus.request(
+	readItems('articles', {
+		deep: {
+			translations: {
+				_filter: {
+					_and: [
+						{
+							languages_code: { _eq: languageCode },
 						},
-					},
-					{
-						slug: {
-							_eq: slug,
+						{
+							slug: { _eq: slug },
 						},
-					},
-				],
+					],
+				},
 			},
 		},
-	},
-	fields: ['*', 'translations.*'],
-	limit: 1,
-});
-const page = response.data[0];
+		fields: ['*', { translations: ['*'] }],
+		limit: 1,
+	})
+);
+
+const page = pages[0];
 ```
 
-:::details **Toggle Open to See Sample Response**
+::: details **Toggle Open to See Sample Response**
 
 ```json
 {

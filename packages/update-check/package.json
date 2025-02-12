@@ -1,7 +1,7 @@
 {
 	"name": "@directus/update-check",
-	"version": "11.0.0",
-	"description": "Check if an update is available for a given package",
+	"version": "13.0.0",
+	"description": "Check if an update for Directus is available",
 	"homepage": "https://directus.io",
 	"repository": {
 		"type": "git",
@@ -21,22 +21,28 @@
 		"dist"
 	],
 	"scripts": {
-		"build": "tsc --project tsconfig.prod.json",
-		"dev": "tsc --watch"
+		"build": "pnpm run '/^bundle|typecheck$/'",
+		"bundle": "tsup src/index.ts --format=esm --dts",
+		"test": "vitest --watch=false",
+		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"boxen": "7.1.0",
-		"chalk": "5.2.0",
-		"find-cache-dir": "4.0.0",
-		"node-fetch-cache": "3.1.3",
-		"semver": "7.5.1"
+		"axios": "1.7.9",
+		"axios-cache-interceptor": "1.6.2",
+		"boxen": "8.0.1",
+		"chalk": "5.4.1",
+		"find-cache-dir": "5.0.0",
+		"semver": "7.6.3"
 	},
 	"devDependencies": {
-		"@directus/tsconfig": "workspace:*",
-		"@npm/types": "1.0.2",
-		"@types/find-cache-dir": "3.2.1",
-		"@types/node-fetch-cache": "3.0.0",
-		"@types/semver": "7.5.0",
-		"typescript": "5.0.4"
+		"@directus/tsconfig": "3.0.0",
+		"@npm/types": "2.0.0",
+		"@types/node": "22.10.5",
+		"@types/semver": "7.5.8",
+		"@vitest/coverage-v8": "2.1.8",
+		"strip-ansi": "7.1.0",
+		"tsup": "8.3.5",
+		"typescript": "5.7.3",
+		"vitest": "2.1.8"
 	}
 }

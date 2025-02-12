@@ -1,28 +1,30 @@
 import { EventEmitter, on } from 'events';
-import { getMessenger } from '../../messenger.js';
+import { useBus } from '../../bus/index.js';
 import type { GraphQLService } from './index.js';
 import { getSchema } from '../../utils/get-schema.js';
-import { ItemsService } from '../items.js';
-import type { Query } from '@directus/types';
 import type { GraphQLResolveInfo, SelectionNode } from 'graphql';
+import { getPayload } from '../../websocket/utils/items.js';
+import type { Subscription } from '../../websocket/types.js';
+import type { WebSocketEvent } from '../../websocket/messages.js';
+import { getQuery } from './schema/parse-query.js';
 
 const messages = createPubSub(new EventEmitter());
 
 export function bindPubSub() {
-	const messenger = getMessenger();
+	const messenger = useBus();
 
 	messenger.subscribe('websocket.event', (message: Record<string, any>) => {
 		messages.publish(`${message['collection']}_mutated`, message);
 	});
 }
 
-export function createSubscriptionGenerator(self: GraphQLService, event: string) {
+export function createSubscriptionGenerator(gql: GraphQLService, event: string) {
 	return async function* (_x: unknown, _y: unknown, _z: unknown, request: GraphQLResolveInfo) {
-		const fields = parseFields(self, request);
+		const fields = parseFields(gql, request);
 		const args = parseArguments(request);
 
 		for await (const payload of messages.subscribe(event)) {
-			const eventData = payload as Record<string, any>;
+			const eventData = payload as WebSocketEvent;
 
 			if ('event' in args && eventData['action'] !== args['event']) {
 				continue; // skip filtered events
@@ -30,28 +32,52 @@ export function createSubscriptionGenerator(self: GraphQLService, event: string)
 
 			const schema = await getSchema();
 
-			if (eventData['action'] === 'create') {
-				const { collection, key } = eventData;
-				const service = new ItemsService(collection, { schema });
-				const data = await service.readOne(key, { fields } as Query);
-				yield { [event]: { key, data, event: 'create' } };
-			}
+			const subscription: Omit<Subscription, 'client'> = {
+				collection: eventData['collection'],
+				event: eventData['action'],
+				query: { fields },
+			};
 
-			if (eventData['action'] === 'update') {
-				const { collection, keys } = eventData;
-				const service = new ItemsService(collection, { schema });
-
-				for (const key of keys) {
-					const data = await service.readOne(key, { fields } as Query);
-					yield { [event]: { key, data, event: 'update' } };
+			if (eventData['action'] === 'delete') {
+				// we have no data to send besides the key
+				for (const key of eventData.keys) {
+					yield { [event]: { key, data: null, event: eventData['action'] } };
 				}
 			}
 
-			if (eventData['action'] === 'delete') {
-				const { keys } = eventData;
+			if (eventData['action'] === 'create') {
+				try {
+					subscription.item = eventData['key'];
+					const result = await getPayload(subscription, gql.accountability, schema, eventData);
 
-				for (const key of keys) {
-					yield { [event]: { key, data: null, event: 'delete' } };
+					yield {
+						[event]: {
+							key: eventData['key'],
+							data: result['data'],
+							event: eventData['action'],
+						},
+					};
+				} catch {
+					// dont notify the subscription of permission errors
+				}
+			}
+
+			if (eventData['action'] === 'update') {
+				for (const key of eventData['keys']) {
+					try {
+						subscription.item = key;
+						const result = await getPayload(subscription, gql.accountability, schema, eventData);
+
+						yield {
+							[event]: {
+								key,
+								data: result['data'],
+								event: eventData['action'],
+							},
+						};
+					} catch {
+						// dont notify the subscription of permission errors
+					}
 				}
 			}
 		}
@@ -72,7 +98,7 @@ function createPubSub<P extends { [key: string]: unknown }>(emitter: EventEmitte
 	};
 }
 
-function parseFields(service: GraphQLService, request: GraphQLResolveInfo) {
+function parseFields(gql: GraphQLService, request: GraphQLResolveInfo) {
 	const selections = request.fieldNodes[0]?.selectionSet?.selections ?? [];
 
 	const dataSelections = selections.reduce((result: readonly SelectionNode[], selection: SelectionNode) => {
@@ -87,17 +113,20 @@ function parseFields(service: GraphQLService, request: GraphQLResolveInfo) {
 		return result;
 	}, []);
 
-	const { fields } = service.getQuery({}, dataSelections, request.variableValues);
+	const { fields } = getQuery({}, dataSelections, request.variableValues, gql.accountability);
 	return fields ?? [];
 }
 
 function parseArguments(request: GraphQLResolveInfo) {
 	const args = request.fieldNodes[0]?.arguments ?? [];
-	return args.reduce((result, current) => {
-		if ('value' in current.value && typeof current.value.value === 'string') {
-			result[current.name.value] = current.value.value;
-		}
+	return args.reduce(
+		(result, current) => {
+			if ('value' in current.value && typeof current.value.value === 'string') {
+				result[current.name.value] = current.value.value;
+			}
 
-		return result;
-	}, {} as Record<string, string>);
+			return result;
+		},
+		{} as Record<string, string>,
+	);
 }

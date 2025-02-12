@@ -13,7 +13,7 @@ readTime: 7 min read
 
 ## Requirements
 
-- Node.js [Active LTS](https://nodejs.dev/en/about/releases/)
+- Node.js [v22](https://github.com/nodejs/release#release-schedule)
 
 ## Server
 
@@ -22,16 +22,11 @@ For server-side CLI, all functionality can be accessed by running `npx directus 
 ### Initialize a New Project
 
 ```bash
-npx directus init
+npm init directus-project <project-folder>
 ```
 
-Will install the required database driver, and create a `.env` file based on the inputted values.
-
-::: warning Initialize Node.js Package
-
-Run `npm init` if your project folder does not contain a `package.json` file.
-
-:::
+Will setup a new Directus project based on the provided configuration values. The script installs the required database
+driver, creates a `.env` file and installs the required dependencies.
 
 ### Bootstrap a Project
 
@@ -47,9 +42,9 @@ Kubernetes configuration.
 
 ::: tip First User
 
-You can use the `ADMIN_EMAIL` and `ADMIN_PASSWORD` environment variables to automatically provision the first user on
-first creation using the `bootstrap` command. See [Environment Variables](/self-hosted/config-options#general) for more
-information.
+You can use the `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `ADMIN_TOKEN` environment variables to automatically provision the
+first user on first creation using the `bootstrap` command. See
+[Environment Variables](/self-hosted/config-options#general) for more information.
 
 :::
 
@@ -172,13 +167,19 @@ npx directus roles create --role <role-name>
 ```
 
 These roles are created with the
-[minimum permissions required](/app/users-roles-permissions#configure-system-permissions) to properly access the App by
-default.
+[minimum permissions required](/user-guide/user-management/users-roles-permissions#configure-system-permissions) to
+properly access the App by default.
 
 To create a new role with admin access, set the `--admin` flag to `true`, such as
 
 ```bash
 npx directus roles create --role <role-name> --admin true
+```
+
+To create a new role with app access, set the `--app` flag to `true`, such as
+
+```bash
+npx directus roles create --role <role-name> --app true
 ```
 
 ### Count Items in a Collection

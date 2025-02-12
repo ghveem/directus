@@ -1,25 +1,3 @@
-<template>
-	<div class="many-to-one">
-		<v-skeleton-loader v-if="loading" type="input" />
-		<v-input v-else clickable :placeholder="t('select_an_item')" @click="$emit('select')">
-			<template v-if="displayItem" #input>
-				<div class="preview">
-					<render-template :collection="collection" :item="displayItem" :template="displayTemplate" />
-				</div>
-			</template>
-
-			<template #append>
-				<template v-if="displayItem">
-					<v-icon v-tooltip="t('deselect')" name="close" class="deselect" @click.stop="$emit('input', undefined)" />
-				</template>
-				<template v-else>
-					<v-icon class="expand" name="expand_more" />
-				</template>
-			</template>
-		</v-input>
-	</div>
-</template>
-
 <script setup lang="ts">
 import { computed, toRefs } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -41,8 +19,35 @@ const { displayItems, displayTemplate, loading } = useDisplayItems(collection, t
 const displayItem = computed(() => (displayItems.value.length > 0 ? displayItems.value[0] : null));
 </script>
 
+<template>
+	<div class="many-to-one">
+		<v-skeleton-loader v-if="loading" type="input" />
+		<v-input v-else clickable :placeholder="t('select_an_item')" @click="$emit('select')">
+			<template v-if="displayItem" #input>
+				<div class="preview">
+					<render-template :collection="collection" :item="displayItem" :template="displayTemplate" />
+				</div>
+			</template>
+
+			<template #append>
+				<div class="item-actions">
+					<v-remove v-if="displayItem" deselect @action="$emit('input', undefined)" />
+
+					<v-icon v-else name="expand_more" />
+				</div>
+			</template>
+		</v-input>
+	</div>
+</template>
+
 <style lang="scss" scoped>
+@use '@/styles/mixins';
+
 .preview {
 	flex-grow: 1;
+}
+
+.item-actions {
+	@include mixins.list-interface-item-actions;
 }
 </style>

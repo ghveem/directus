@@ -7,9 +7,7 @@ pageClass: page-reference
 # Activity
 
 > All events within Directus are tracked and stored in the activities collection. This gives you full accountability
-> over everything that happens. [Learn more about Activity](/getting-started/glossary#activity).
-
----
+> over everything that happens. [Learn more about Activity](/user-guide/overview/glossary#activity).
 
 ## The Activity Object
 
@@ -20,7 +18,7 @@ Action that was performed.
 Collection identifier in which the item resides.
 
 `comment` **string**\
-User comment. This will store the comments that show up in the right sidebar of the item edit page in the admin app.
+User comment. This will store the comments that show up in the right sidebar of the item edit page in the Data Studio.
 
 `id` **integer**\
 Unique identifier for the object.
@@ -58,13 +56,49 @@ Any changes that were made in this activity. One-to-many to [revisions](/referen
 }
 ```
 
----
-
 ## List Activity Actions
 
 Returns a list of activity actions.
 
-### Query Parameters
+### Request
+
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
+
+`GET /activity`
+
+`SEARCH /activity`
+
+If using SEARCH you can provide a [query object](/reference/query) as the body of your request.
+
+[Learn more about SEARCH ->](/reference/introduction#search-http-method)
+
+</template>
+<template #graphql>
+
+`POST /graphql/system`
+
+```graphql
+type Query {
+	activity: [directus_activity]
+}
+```
+
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, readActivities } from '@directus/sdk';
+
+const client = createDirectus('directus_project_url').with(rest());
+
+const result = await client.request(readActivities(query_object));
+```
+
+</template>
+</SnippetToggler>
+
+#### Query Parameters
 
 Supports all [global query parameters](/reference/query).
 
@@ -73,62 +107,59 @@ Supports all [global query parameters](/reference/query).
 An array of up to [limit](/reference/query#limit) [activity objects](#the-activity-object). If no items are available,
 data will be an empty array.
 
-### REST API
+### Example
 
-```
-GET /activity
-SEARCH /activity
-```
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
 
-[Learn more about SEARCH ->](/reference/introduction#search-http-method)
+`GET /activity`
 
-### GraphQL
+`SEARCH /activity`
 
-```
-POST /graphql/system
-```
-
-```graphql
-type Query {
-	activity: [directus_activity]
-}
-```
-
-##### Example
+</template>
+<template #graphql>
 
 ```graphql
 query {
 	activity {
-		...
+		# ...
 	}
 }
 ```
 
----
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, readActivities } from '@directus/sdk';
+
+const client = createDirectus('https://directus.example.com').with(rest());
+
+const result = await client.request(
+	readActivities({
+		fields: ['*'],
+	})
+);
+```
+
+</template>
+</SnippetToggler>
 
 ## Retrieve Activity Action
 
 Returns a single activity action by primary key.
 
-### Query Parameters
+### Request
 
-Supports all [global query parameters](/reference/query).
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
 
-### Returns
+`GET /activity/:id`
 
-Returns an [activity object](#the-activity-object) if a valid identifier was provided.
+</template>
+<template #graphql>
 
-### REST API
-
-```
-GET /activity/:id
-```
-
-### GraphQL
-
-```
-POST /graphql/system
-```
+`POST /graphql/system`
 
 ```graphql
 type Query {
@@ -136,169 +167,62 @@ type Query {
 }
 ```
 
-##### Example
+</template>
+<template #sdk>
+
+```js
+import { createDirectus, rest, readActivity } from '@directus/sdk';
+
+const client = createDirectus('directus_project_url').with(rest());
+
+const result = await client.request(readActivity(activity_id, query_object));
+```
+
+</template>
+</SnippetToggler>
+
+#### Query Parameters
+
+Supports all [global query parameters](/reference/query).
+
+### Response
+
+Returns an [activity object](#the-activity-object) if a valid identifier was provided.
+
+### Example
+
+<SnippetToggler :choices="['REST', 'GraphQL', 'SDK']" group="api">
+<template #rest>
+
+`GET /activity/15`
+
+</template>
+<template #graphql>
+
+`POST /graphql/system`
 
 ```graphql
 query {
 	activity_by_id(id: 15) {
-		...
+		# ...
 	}
 }
 ```
 
----
+</template>
+<template #sdk>
 
-## Create a Comment
+```js
+import { createDirectus, rest, readActivity } from '@directus/sdk';
 
-Creates a new comment on a given item.
+const client = createDirectus('https://directus.example.com').with(rest());
 
-### Request Body
-
-`collection` **Required**\
-Collection in which the item resides.
-
-`item` **Required**\
-Primary Key of the item to comment on.
-
-`comment` **Required**\
-The comment content. Supports Markdown.
-
-### Returns
-
-Returns the [activity object](#the-activity-object) of the created comment.
-
-### REST API
-
-```
-POST /activity/comment
+const result = await client.request(
+	readActivity('53281', {
+		fields: ['*'],
+	})
+);
 ```
 
-##### Example
-
-```json
-// POST /activity/comment
-
-{
-	"collection": "pages",
-	"item": 3,
-	"comment": "Hello World"
-}
-```
-
-### GraphQL
-
-```
-POST /graphql/system
-```
-
-```graphql
-type Mutation {
-	create_comment(collection: String!, item: ID!, comment: String!): directus_activity
-}
-```
-
-##### Example
-
-```graphql
-mutation {
-	create_comment(
-		collection: "pages",
-		item: 3,
-		comment: "Hello World"
-	) { ... }
-}
-```
-
----
-
-## Update a Comment
-
-Updates an existing comment by activity action primary key.
-
-### Request Body
-
-`comment` **Required**\
-The updated comment content. Supports Markdown.
-
-### Returns
-
-Returns the [activity object](#the-activity-object) of the created comment.
-
-### REST API
-
-```
-PATCH /activity/comment/:id
-```
-
-##### Example
-
-```json
-// PATCH /activity/comment/15
-
-{
-	"comment": "Hello World!!"
-}
-```
-
-### GraphQL
-
-```
-POST /graphql/system
-```
-
-```graphql
-type Mutation {
-	update_comment(id: ID!, comment: String!): directus_activity
-}
-```
-
-##### Example
-
-```graphql
-mutation {
-	update_comment(
-		id: 3,
-		comment: "Hello World",
-	) { ... }
-}
-```
-
----
-
-## Delete a Comment
-
-Deletes a comment.
-
-### REST API
-
-```
-DELETE /activity/comment/:id
-```
-
-##### Example
-
-```
-DELETE /activity/comment/15
-```
-
-### GraphQL
-
-```
-POST /graphql/system
-```
-
-```graphql
-type Mutation {
-	delete_comment(id: ID): delete_one
-}
-```
-
-##### Example
-
-```graphql
-mutation {
-	delete_comment(id: 3) {
-		id
-	}
-}
-```
+</template>
+</SnippetToggler>

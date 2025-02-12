@@ -1,11 +1,23 @@
 import type { KNEX_TYPES } from '@directus/constants';
-import type { Field, Relation, Type } from '@directus/types';
+import type { Column } from '@directus/schema';
+import type { Field, RawField, Relation, Type } from '@directus/types';
 import type { Knex } from 'knex';
 import type { DatabaseClient } from '../../../types/index.js';
+import { getDefaultIndexName } from '../../../utils/get-default-index-name.js';
 import { getDatabaseClient } from '../../index.js';
 import { DatabaseHelper } from '../types.js';
 
 export type Options = { nullable?: boolean; default?: any; length?: number };
+
+export type Sql = {
+	sql: string;
+	bindings: readonly Knex.Value[];
+};
+
+export type SortRecord = {
+	alias: string;
+	column: Knex.Raw;
+};
 
 export abstract class SchemaHelper extends DatabaseHelper {
 	isOneOfClients(clients: DatabaseClient[]): boolean {
@@ -22,11 +34,15 @@ export abstract class SchemaHelper extends DatabaseHelper {
 		});
 	}
 
+	generateIndexName(type: 'unique' | 'foreign' | 'index', collection: string, fields: string | string[]): string {
+		return getDefaultIndexName(type, collection, fields);
+	}
+
 	async changeToType(
 		table: string,
 		column: string,
 		type: (typeof KNEX_TYPES)[number],
-		options: Options = {}
+		options: Options = {},
 	): Promise<void> {
 		await this.knex.schema.alterTable(table, (builder) => {
 			const b = type === 'string' ? builder.string(column, options.length) : builder[type](column);
@@ -51,7 +67,7 @@ export abstract class SchemaHelper extends DatabaseHelper {
 		table: string,
 		column: string,
 		type: (typeof KNEX_TYPES)[number],
-		options: Options
+		options: Options,
 	): Promise<void> {
 		const tempName = `${column}__temp`;
 
@@ -96,6 +112,16 @@ export abstract class SchemaHelper extends DatabaseHelper {
 		return;
 	}
 
+	setNullable(column: Knex.ColumnBuilder, field: RawField | Field, existing: Column | null): void {
+		const isNullable = field.schema?.is_nullable ?? existing?.is_nullable ?? true;
+
+		if (isNullable) {
+			column.nullable();
+		} else {
+			column.notNullable();
+		}
+	}
+
 	processFieldType(field: Field): Type {
 		return field.type;
 	}
@@ -126,11 +152,11 @@ export abstract class SchemaHelper extends DatabaseHelper {
 		table: string,
 		primaryKey: string,
 		orderByString: string,
-		orderByFields: Knex.Raw[]
+		orderByFields: Knex.Raw[],
 	): Knex.QueryBuilder {
 		dbQuery.rowNumber(
 			knex.ref('directus_row_number').toQuery(),
-			knex.raw(`partition by ?? order by ${orderByString}`, [`${table}.${primaryKey}`, ...orderByFields])
+			knex.raw(`partition by ?? order by ${orderByString}`, [`${table}.${primaryKey}`, ...orderByFields]),
 		);
 
 		return dbQuery;
@@ -138,5 +164,28 @@ export abstract class SchemaHelper extends DatabaseHelper {
 
 	formatUUID(uuid: string): string {
 		return uuid; // no-op by default
+	}
+
+	/**
+	 * @returns Size of the database in bytes
+	 */
+	async getDatabaseSize(): Promise<number | null> {
+		return null;
+	}
+
+	prepQueryParams(queryParams: Sql): Sql {
+		return queryParams;
+	}
+
+	prepBindings(bindings: Knex.Value[]): any {
+		return bindings;
+	}
+
+	addInnerSortFieldsToGroupBy(
+		_groupByFields: (string | Knex.Raw)[],
+		_sortRecords: SortRecord[],
+		_hasRelationalSort: boolean,
+	): void {
+		// no-op by default
 	}
 }

@@ -3,7 +3,6 @@ contributors: Esther Agbaje
 description: "Learn how to get started with Directus' GraphQL interface."
 ---
 
-
 # Getting Started With GraphQL Subscriptions
 
 You can connect to a Directus project and get updates on data held in a collection in real-time.
@@ -20,7 +19,7 @@ You will need a Directus project. If you don’t already have one, the easiest w
 [managed Directus Cloud service](https://directus.cloud). You can also self-host Directus, ensuring the
 `WEBSOCKETS_ENABLED` environment variable is set to `true`.
 
-Create a new collection called `messages`, with a `date_created` field enabled in the _Optional System Fields_ pane on
+Create a new collection called `messages`, with a `date_created` field enabled in the _Optional Fields_ pane on
 collection creation. Create the required field such as an input field called `text`.
 
 If it doesn’t already exist, create a user with a role that can execute read and create operations on the collection.
@@ -51,8 +50,8 @@ data updates.
 
 ## Create a Subscription
 
-After subscribing to collections over your connection, you will receive real-time data changes of those collections. To subscribe to a
-`messages` collection, the query would look like this:
+After subscribing to collections over your connection, you will receive real-time data changes of those collections. To
+subscribe to a `messages` collection, the query would look like this:
 
 ```js
 client.subscribe(

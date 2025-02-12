@@ -40,7 +40,7 @@ export function useStores(
 		useInsightsStore,
 		useFlowsStore,
 		useNotificationsStore,
-	]
+	],
 ): GenericStore[] {
 	return stores.map((useStore) => useStore()) as GenericStore[];
 }
@@ -70,10 +70,10 @@ export async function hydrate(): Promise<void> {
 		const lang = getCurrentLanguage();
 		const currentUser = userStore.currentUser;
 
-		if (currentUser?.role) {
+		if (currentUser?.app_access) {
 			await Promise.all([permissionsStore.hydrate(), fieldsStore.hydrate({ skipTranslation: true })]);
 
-			const hydratedStores = ['userStore', 'permissionsStore', 'fieldsStore'];
+			const hydratedStores = ['userStore', 'permissionsStore', 'fieldsStore', 'serverStore'];
 			await Promise.all(stores.filter(({ $id }) => !hydratedStores.includes($id)).map((store) => store.hydrate?.()));
 
 			await onHydrateExtensions();

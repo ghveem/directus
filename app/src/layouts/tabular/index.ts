@@ -1,18 +1,19 @@
-import { HeaderRaw, Item, Sort } from '@/components/v-table/types';
+import { HeaderRaw, Sort } from '@/components/v-table/types';
 import { useAliasFields } from '@/composables/use-alias-fields';
+import { useLayoutClickHandler } from '@/composables/use-layout-click-handler';
 import { useFieldsStore } from '@/stores/fields';
 import { adjustFieldsForDisplays } from '@/utils/adjust-fields-for-displays';
-import { formatCollectionItemsCount } from '@/utils/format-collection-items-count';
+import { formatItemsCountPaginated } from '@/utils/format-items-count';
 import { getDefaultDisplayForType } from '@/utils/get-default-display-for-type';
 import { hideDragImage } from '@/utils/hide-drag-image';
 import { saveAsCSV } from '@/utils/save-as-csv';
 import { syncRefProperty } from '@/utils/sync-ref-property';
 import { useCollection, useItems, useSync } from '@directus/composables';
+import { defineLayout } from '@directus/extensions';
 import { Field } from '@directus/types';
-import { defineLayout } from '@directus/utils';
-import { debounce } from 'lodash';
-import { computed, ref, toRefs, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { debounce, flatten } from 'lodash';
+import { computed, ref, toRefs, unref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import TabularActions from './actions.vue';
 import TabularOptions from './options.vue';
 import TabularLayout from './tabular.vue';
@@ -21,7 +22,7 @@ import { LayoutOptions, LayoutQuery } from './types';
 export default defineLayout<LayoutOptions, LayoutQuery>({
 	id: 'tabular',
 	name: '$t:layouts.tabular.tabular',
-	icon: 'reorder',
+	icon: 'table_rows',
 	component: TabularLayout,
 	slots: {
 		options: TabularOptions,
@@ -30,15 +31,14 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 	},
 	headerShadow: false,
 	setup(props, { emit }) {
-		const router = useRouter();
-
+		const { t, n } = useI18n();
 		const fieldsStore = useFieldsStore();
 
 		const selection = useSync(props, 'selection', emit);
 		const layoutOptions = useSync(props, 'layoutOptions', emit);
 		const layoutQuery = useSync(props, 'layoutQuery', emit);
 
-		const { collection, filter, filterUser, search } = toRefs(props);
+		const { collection, filter, filterSystem, filterUser, search } = toRefs(props);
 
 		const { info, primaryKeyField, fields: fieldsInCollection, sortField } = useCollection(collection);
 
@@ -46,11 +46,11 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 
 		const { aliasedFields, aliasQuery, aliasedKeys } = useAliasFields(fields, collection);
 
-		const fieldsWithRelationalAliased = computed(() => {
-			return Object.values(aliasedFields.value).reduce<string[]>((acc, value) => {
-				return [...acc, ...value.fields];
-			}, []);
-		});
+		const fieldsWithRelationalAliased = computed(() =>
+			flatten(Object.values(aliasedFields.value).map(({ fields }) => fields)),
+		);
+
+		const { onClick } = useLayoutClickHandler({ props, selection, primaryKeyField });
 
 		const {
 			items,
@@ -71,22 +71,24 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			alias: aliasQuery,
 			filter,
 			search,
+			filterSystem,
 		});
 
-		const {
-			tableSort,
-			tableHeaders,
-			tableRowHeight,
-			onRowClick,
-			onSortChange,
-			onAlignChange,
-			activeFields,
-			tableSpacing,
-		} = useTable();
+		const { tableSort, tableHeaders, tableRowHeight, onSortChange, onAlignChange, activeFields, tableSpacing } =
+			useTable();
 
 		const showingCount = computed(() => {
-			const filtering = Boolean((itemCount.value || 0) < (totalCount.value || 0) && filterUser.value);
-			return formatCollectionItemsCount(itemCount.value || 0, page.value, limit.value, filtering);
+			// Don't show count if there are no items
+			if (!totalCount.value || !itemCount.value) return;
+
+			return formatItemsCountPaginated({
+				currentItems: itemCount.value,
+				currentPage: page.value,
+				perPage: limit.value,
+				isFiltered: !!filterUser.value,
+				totalItems: totalCount.value,
+				i18n: { t, n },
+			});
 		});
 
 		return {
@@ -96,7 +98,7 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			error,
 			totalPages,
 			tableSort,
-			onRowClick,
+			onRowClick: onClick,
 			onSortChange,
 			onAlignChange,
 			tableRowHeight,
@@ -155,18 +157,34 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 		function useItemOptions() {
 			const page = syncRefProperty(layoutQuery, 'page', 1);
 			const limit = syncRefProperty(layoutQuery, 'limit', 25);
-			const defaultSort = computed(() => (primaryKeyField.value ? [primaryKeyField.value?.field] : []));
+
+			const defaultSort = computed(() => {
+				const field = sortField.value ?? primaryKeyField.value?.field;
+				return field ? [field] : [];
+			});
+
 			const sort = syncRefProperty(layoutQuery, 'sort', defaultSort);
 
 			const fieldsDefaultValue = computed(() => {
 				return fieldsInCollection.value
-					.filter((field: Field) => !field.meta?.hidden)
+					.filter((field) => !field.meta?.hidden && !field.meta?.special?.includes('no-data'))
 					.slice(0, 4)
-					.map(({ field }: Field) => field)
+					.map(({ field }) => field)
 					.sort();
 			});
 
-			const fields = syncRefProperty(layoutQuery, 'fields', fieldsDefaultValue);
+			const fields = computed({
+				get() {
+					if (layoutQuery.value?.fields) {
+						return layoutQuery.value.fields.filter((field) => fieldsStore.getField(collection.value!, field));
+					} else {
+						return unref(fieldsDefaultValue);
+					}
+				},
+				set(value) {
+					layoutQuery.value = Object.assign({}, layoutQuery.value, { fields: value });
+				},
+			});
 
 			const fieldsWithRelational = computed(() => {
 				if (!props.collection) return [];
@@ -193,7 +211,7 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 				() => layoutOptions.value,
 				() => {
 					localWidths.value = {};
-				}
+				},
 			);
 
 			const saveWidthsToLayoutOptions = debounce(() => {
@@ -218,7 +236,19 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 			const tableHeaders = computed<HeaderRaw[]>({
 				get() {
 					return activeFields.value.map((field) => {
-						const description: string | null = null;
+						let description: string | null = null;
+
+						const fieldParts = field.key.split('.');
+
+						if (fieldParts.length > 1) {
+							const fieldNames = fieldParts.map((fieldKey, index) => {
+								const pathPrefix = fieldParts.slice(0, index);
+								const field = fieldsStore.getField(collection.value!, [...pathPrefix, fieldKey].join('.'));
+								return field?.name ?? fieldKey;
+							});
+
+							description = fieldNames.join(' -> ');
+						}
 
 						return {
 							text: field.name,
@@ -275,31 +305,11 @@ export default defineLayout<LayoutOptions, LayoutQuery>({
 				tableHeaders,
 				tableSpacing,
 				tableRowHeight,
-				onRowClick,
 				onSortChange,
 				onAlignChange,
 				activeFields,
 				getFieldDisplay,
 			};
-
-			function onRowClick({ item, event }: { item: Item; event: PointerEvent }) {
-				if (props.readonly === true || !primaryKeyField.value) return;
-
-				const primaryKey = item[primaryKeyField.value.field];
-
-				if (props.selectMode || selection.value?.length > 0) {
-					if (selection.value?.includes(primaryKey) === false) {
-						selection.value = selection.value.concat(primaryKey);
-					} else {
-						selection.value = selection.value.filter((item) => item !== primaryKey);
-					}
-				} else {
-					const next = router.resolve(`/content/${collection.value}/${encodeURIComponent(primaryKey)}`);
-
-					if (event.ctrlKey || event.metaKey) window.open(next.href, '_blank');
-					else router.push(next);
-				}
-			}
 
 			function onSortChange(newSort: Sort | null) {
 				if (!newSort?.by) {

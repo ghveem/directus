@@ -1,6 +1,5 @@
 import api from '@/api';
 import { useFieldsStore } from '@/stores/fields';
-import { unexpectedError } from '@/utils/unexpected-error';
 import { Relation, DeepPartial } from '@directus/types';
 import { getRelationType } from '@directus/utils';
 import { isEqual } from 'lodash';
@@ -27,29 +26,25 @@ export const useRelationsStore = defineStore({
 		async upsertRelation(collection: string, field: string, values: DeepPartial<Relation>) {
 			const existing = this.getRelationForField(collection, field);
 
-			try {
-				if (existing) {
-					if (isEqual(existing, values)) return;
+			if (existing) {
+				if (isEqual(existing, values)) return;
 
-					const updatedRelationResponse = await api.patch<{ data: Relation }>(
-						`/relations/${collection}/${field}`,
-						values
-					);
+				const updatedRelationResponse = await api.patch<{ data: Relation }>(
+					`/relations/${collection}/${field}`,
+					values,
+				);
 
-					this.relations = this.relations.map((relation) => {
-						if (relation.collection === collection && relation.field === field) {
-							return updatedRelationResponse.data.data;
-						}
+				this.relations = this.relations.map((relation) => {
+					if (relation.collection === collection && relation.field === field) {
+						return updatedRelationResponse.data.data;
+					}
 
-						return relation;
-					});
-				} else {
-					const createdRelationResponse = await api.post<{ data: Relation }>(`/relations`, values);
+					return relation;
+				});
+			} else {
+				const createdRelationResponse = await api.post<{ data: Relation }>(`/relations`, values);
 
-					this.relations = [...this.relations, createdRelationResponse.data.data];
-				}
-			} catch (err: any) {
-				unexpectedError(err);
+				this.relations = [...this.relations, createdRelationResponse.data.data];
 			}
 		},
 		/**
@@ -69,7 +64,9 @@ export const useRelationsStore = defineStore({
 			});
 
 			if (relations.length > 0) {
-				const isM2M = relations[0].meta?.junction_field !== null;
+				const firstRelation = relations[0] as Relation;
+
+				const isM2M = firstRelation.meta?.junction_field !== null;
 
 				// If the relation matching the field has a junction field, it's a m2m. In that case,
 				// we also want to return the secondary relationship (from the jt to the related)
@@ -77,7 +74,9 @@ export const useRelationsStore = defineStore({
 				if (isM2M) {
 					const secondaryRelation = this.relations.find((relation) => {
 						return (
-							relation.collection === relations[0].collection && relation.field === relations[0].meta?.junction_field
+							relation.collection === firstRelation.collection &&
+							relation.field === firstRelation.meta?.junction_field &&
+							relation.meta?.junction_field === firstRelation.field
 						);
 					});
 
@@ -114,12 +113,12 @@ export const useRelationsStore = defineStore({
 		getRelationTypes(collection: string, path: string): ('m2a' | 'o2m' | 'm2o')[] {
 			if (!path.includes('.')) return [];
 
-			const parts = path.split('.');
+			const parts = path.split('.') as [string] & string[];
 
-			const currentField = parts[0].includes(':') ? parts[0].split(':')[0] : parts[0];
+			const currentField = parts[0].includes(':') ? (parts[0].split(':')[0] as string) : parts[0];
 
 			const relation = this.getRelationsForField(collection, currentField).find(
-				(relation) => relation.collection === collection || relation.related_collection === collection
+				(relation) => relation.collection === collection || relation.related_collection === collection,
 			);
 
 			if (!relation) return [];
@@ -138,7 +137,7 @@ export const useRelationsStore = defineStore({
 					return ['m2o', ...this.getRelationTypes(relation.related_collection, parts.slice(1).join('.'))];
 				case 'm2a':
 					if (!relation.meta?.one_allowed_collections) return ['m2a'];
-					return ['m2a', ...this.getRelationTypes(parts[0].split(':')[1], parts.slice(1).join('.'))];
+					return ['m2a', ...this.getRelationTypes(parts[0].split(':')[1] as string, parts.slice(1).join('.'))];
 			}
 
 			return [];

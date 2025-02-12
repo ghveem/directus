@@ -1,10 +1,10 @@
+import { ErrorCode, isDirectusError } from '@directus/errors';
+import type { Item } from '@directus/types';
 import { Router } from 'express';
-import { ForbiddenException } from '../exceptions/index.js';
 import { respond } from '../middleware/respond.js';
 import { validateBatch } from '../middleware/validate-batch.js';
 import { CollectionsService } from '../services/collections.js';
 import { MetaService } from '../services/meta.js';
-import type { Item } from '../types/index.js';
 import asyncHandler from '../utils/async-handler.js';
 
 const router = Router();
@@ -29,7 +29,7 @@ router.post(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 const readHandler = asyncHandler(async (req, res, next) => {
@@ -73,7 +73,7 @@ router.get(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.patch(
@@ -90,7 +90,7 @@ router.patch(
 			const collections = await collectionsService.readMany(collectionKeys);
 			res.locals['payload'] = { data: collections || null };
 		} catch (error: any) {
-			if (error instanceof ForbiddenException) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
 				return next();
 			}
 
@@ -99,7 +99,7 @@ router.patch(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.patch(
@@ -116,7 +116,7 @@ router.patch(
 			const collection = await collectionsService.readOne(req.params['collection']!);
 			res.locals['payload'] = { data: collection || null };
 		} catch (error: any) {
-			if (error instanceof ForbiddenException) {
+			if (isDirectusError(error, ErrorCode.Forbidden)) {
 				return next();
 			}
 
@@ -125,7 +125,7 @@ router.patch(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 router.delete(
@@ -140,7 +140,7 @@ router.delete(
 
 		return next();
 	}),
-	respond
+	respond,
 );
 
 export default router;

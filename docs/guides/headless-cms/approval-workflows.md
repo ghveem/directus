@@ -1,39 +1,23 @@
 ---
-description:
-tags: []
-skill_level:
+description: Workflows are the use of custom access permissions to add structured stages to the flow of content creation or data generation. Workflows enable you to do things like pass off work in progress between multiple roles, build decision trees, _and beyond!_
 directus_version: 9.18.1
-author_override:
 author: Eron Powell
 ---
 
 # Building Content Approval Workflows
 
-> Workflows are the use of custom access permissions to add structured stages to the flow of content creation or data
-> generation. Workflows enable you to do things like pass off work in progress between multiple roles, build decision
-> trees, _and beyond!_
-
-:::tip Author: {{$frontmatter.author}}
-
-<!-- **Skill Level:** {{$frontmatter.skill_level}}\ -->
-
-**Directus Version:** {{$frontmatter.directus_version}}
-
-<!-- **Tags:** {{$frontmatter.tags.join(", ")}} -->
-
-:::
+<GuideMeta />
 
 ## Explanation
 
-Remember, your basic [CRUDS permissions](/app/users-roles-permissions/permissions#configure-permissions)
-define what a role can and can't do to all items in a collection.
-[Custom access permissions](/app/users-roles-permissions/permissions#configure-custom-permissions) take
+CRUDS permissions define what a role can and can't do to all items in a collection. Custom access permissions take
 things a step further and let you define what a role can and can't do to each item in a collection, _based on its
 [field values](/app/data-model/fields)_.
 
 Workflows are when you use these permissions techniques to create structured stages to content or data creation. In
 simplest terms, it is when you have two or more roles, and you give them different permissions at each stage in the
-content creation process.
+content creation process. This is common when using Directus as a
+[Headless CMS](https://directus.io/solutions/headless-cms).
 
 There are an infinite number of possible workflows you could configure. But for this recipe, we will configure a simple
 workflow where `writers` and `editors` work together to create, co-edit and publish `articles`.
@@ -57,12 +41,12 @@ This whole workflow is created with permissions. All we need to do to create the
 
 ## How-To Guide
 
-:::tip Requirements
+::: tip Requirements
 
 To implement a workflow, you'll need:
 
-- An understanding of [permissions](/app/users-roles-permissions) and [filters](/reference/filter-rules)
-  in Directus.
+- An understanding of [permissions](/user-guide/user-management/users-roles-permissions) and
+  [filters](/reference/filter-rules) in Directus.
 - A collection with some kind of content. In this recipe, we'll use a collection called `articles`.
 - A field on that collection to validate conditionally. We'll use a `status` field.
 - Two _(or more)_ roles that will work to author content. We'll use `writer` and `editor` roles.
@@ -75,14 +59,12 @@ To implement a workflow, you'll need:
 
 To create a structured workflow for `articles`, follow these steps.
 
-1. First, [create a field](/app/data-model/fields#create-a-field-standard) to track the article status.
-   We'll call this field `status`, but it could be named anything.
-2. [Create a field](/app/data-model/fields#create-a-field-advanced) with a Dropdown Interface. Name it
-   `status` and add the stages _(`draft`, `under review` and `published`)_ needed for your content creation process.
-3. Next, [create two roles](/app/users-roles-permissions/roles#create-a-role): `author` and `editor`.
-4. Finally, configure
-   [custom access permissions](/app/users-roles-permissions/permissions#configure-custom-permissions) for
-   each role based on the value of the `status` field.
+1. First, [create a field](/app/data-model/fields#create-a-field-standard) to track the article status. We'll call this
+   field `status`, but it could be named anything.
+2. [Create a field](/app/data-model/fields#create-a-field-advanced) with a Dropdown Interface. Name it `status` and add
+   the stages _(`draft`, `under review` and `published`)_ needed for your content creation process.
+3. Next, create two roles: `author` and `editor`.
+4. Finally, configure custom access permissions for each role based on the value of the `status` field.
    - For the `author` role:
      - Set a filter under **Create > Use Custom > Field Validation** to ensure the author can only create articles with
        a `draft` status.
@@ -133,9 +115,8 @@ A minor misconfiguration here could ruin academic integrity. Here's a few potent
 When creating your own workflow, its a good idea to define each role involved, each stage in the workflow, and the
 explicit set of permissions each role has at each stage.
 
-:::tip Next Steps
+::: tip Next Steps
 
-Workflows can be further enhanced with custom [Interfaces](/extensions/interfaces) as well as
-[flows](/app/flows).
+Workflows can be further enhanced with custom [Interfaces](/extensions/interfaces) as well as [flows](/app/flows).
 
 :::
